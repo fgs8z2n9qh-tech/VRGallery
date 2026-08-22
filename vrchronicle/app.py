@@ -130,6 +130,11 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key == "rail":                     # the timeline rail, mid-drag
+                rail = win.page_grid.rail
+                rail._show_bubble(rail.height() * 0.45)
+                rail._hover_y = rail.height() * 0.45
+                rail.update()
             elif key == "stats-year":               # statistics narrowed to a year
                 win.activate("stats")
                 if win.page_stats.cb_year.count() > 1:

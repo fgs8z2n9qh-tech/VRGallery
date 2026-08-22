@@ -12,6 +12,7 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from vrchronicle import paths
+from vrchronicle.gridmodel import KIND_PHOTO as KIND_PHOTO_KIND
 
 
 @pytest.fixture(scope="module")
@@ -123,6 +124,68 @@ def test_the_year_picker_actually_changes_the_statistics(window):
     assert page.lab_sub.text().startswith(page.selected_year())
     # and the poster button names the year it would build
     assert page.btn_year.text() == f"{page.poster_year()} in review"
+
+
+def test_the_timeline_rail_lands_on_the_month_it_shows(window, app):
+    """The rail used to place its marks by model row.
+
+    A day header is one row and a whole band, while twenty photos are twenty
+    rows in three bands, so row position is not proportional to height and the
+    year labels sat well above where that year really started.
+    """
+    from PySide6.QtCore import QPoint, Qt
+    from PySide6.QtTest import QTest
+
+    rows = []
+    for year in (2023, 2024, 2025):
+        for month in range(1, 13):
+            for n in range(6):
+                day = f"{year}-{month:02d}-{(n % 27) + 1:02d}"
+                name = f"VRChat_{day}_10-00-{n:02d}.000.png"
+                rows.append({"path": f"/x/{year}{month:02d}{n}.png", "folder": "/x",
+                             "filename": name, "taken_at": f"{day}T10:00:0{n}",
+                             "day": day, "filesize": 100, "mtime": 1.0})
+    window.db.upsert_photos(rows)
+
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    page.refresh()
+    app.processEvents()
+    page._refresh_rail()
+    app.processEvents()
+
+    marks, total = page.rail_marks()
+    assert len(marks) >= 30, "the library should span three years of months"
+    assert total > page.view.viewport().height()
+    assert marks == sorted(marks), "marks must run down the rail in order"
+
+    def topmost(view):
+        """First item under the top of the viewport, skipping the gaps."""
+        w = view.viewport().width()
+        for y in range(2, 70, 3):
+            for x in (10, w // 2, w - 12):
+                ix = view.indexAt(QPoint(x, y))
+                if ix.isValid():
+                    return ix
+        return None
+
+    bar = page.view.verticalScrollBar()
+    checked = 0
+    for px, ym in marks:
+        if px > bar.maximum():
+            continue                       # inside the last screenful: cannot scroll there
+        bar.setValue(px)
+        app.processEvents()
+        ix = topmost(page.view)
+        assert ix is not None, f"nothing at the top after jumping to {ym}"
+        kind, payload = page.model._rows[ix.row()]
+        day = payload[0] if kind != KIND_PHOTO_KIND else payload.day
+        assert day[:7] == ym, f"the rail says {ym} but that point shows {day[:7]}"
+        checked += 1
+    assert checked >= 20, "too few marks were actually verifiable"
 
 
 def test_filters_apply_without_error(window):

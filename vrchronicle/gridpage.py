@@ -1,5 +1,5 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import QDate, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QSlider, QVBoxLayout,
@@ -10,50 +10,98 @@ from .db import PhotoFilter
 from .gridmodel import GridModel, GridView, PhotoDelegate, KIND_PHOTO, ItemRole, KindRole
 
 
+class _RailBubble(QWidget):
+    """The month label the timeline rail shows while you drag it."""
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._text = ""
+        self._accent = "#3d8bff"
+
+    def set_text(self, text, accent):
+        self._text, self._accent = text, accent
+        f = QFont()
+        f.setPointSizeF(9.0)
+        f.setWeight(QFont.DemiBold)
+        fm = QFontMetrics(f)
+        self.resize(fm.horizontalAdvance(text) + 22, fm.height() + 12)
+        self.update()
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        f = QFont()
+        f.setPointSizeF(9.0)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        p.setBrush(QColor(12, 14, 20, 242))
+        p.setPen(QPen(QColor(self._accent), 1))
+        p.drawRoundedRect(r, 9, 9)
+        p.setPen(QColor(style.PAL["text"]))
+        p.drawText(r, Qt.AlignCenter, self._text)
+        p.end()
+
+
 class TimelineRail(QWidget):
-    """A thin month scale beside the grid: click or drag to jump through years."""
-    jump_to = Signal(int)
+    """A thin month scale beside the grid: click or drag to jump through years.
+
+    Everything here is in CONTENT PIXELS, not model rows. A day header is one
+    row and a whole band; twenty photos are twenty rows in three bands. Placing
+    the marks by row index therefore put the year labels well away from where
+    that year actually starts.
+    """
+    jump_to = Signal(int)         # a vertical scrollbar value
 
     WIDTH = 54
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setFixedWidth(self.WIDTH)
-        self._marks = []          # (model_row, "YYYY-MM")
-        self._rows = 0
-        self._row = 0.0           # current top row, same scale as the marks
+        self._marks = []          # (content_y_px, "YYYY-MM")
+        self._total = 1           # full content height in px
+        self._pos = 0.0           # current scroll value in px
         self._hover_y = None      # where the pointer is, for the month bubble
+        self._bubble = None
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
-    def set_marks(self, marks, rows):
+    def set_marks(self, marks, total):
         self._marks = marks
-        self._rows = max(1, rows)
+        self._total = max(1, total)
         self.setVisible(len(marks) > 1)
         self.update()
 
-    def set_row(self, row):
-        self._row = max(0.0, min(float(self._rows - 1), float(row)))
+    def set_pos(self, px):
+        self._pos = max(0.0, min(float(self._total), float(px)))
         self.update()
 
-    def _y_for(self, row):
+    def _y_for(self, px):
         top, bottom = 10, self.height() - 10
-        return top + (bottom - top) * (row / max(1, self._rows - 1))
+        return top + (bottom - top) * (min(px, self._total) / self._total)
 
-    def _row_at(self, y):
+    def _px_at(self, y):
         top, bottom = 10, self.height() - 10
         frac = (y - top) / max(1, bottom - top)
-        return int(round(max(0.0, min(1.0, frac)) * max(0, self._rows - 1)))
+        return int(round(max(0.0, min(1.0, frac)) * self._total))
 
     def _accent_key(self):
         page = self.parent()
         cfg = getattr(page, "cfg", None)
         return cfg.get("accent") if cfg is not None else style.DEFAULT_ACCENT
 
-    def _month_at(self, row):
+    def _month_at(self, px):
+        """The month whose start is the last one at or above this point."""
         if not self._marks:
             return ""
-        return min(self._marks, key=lambda m: abs(m[0] - row))[1]
+        best = self._marks[0][1]
+        for mark_px, ym in self._marks:
+            if mark_px <= px:
+                best = ym
+            else:
+                break
+        return best
 
     def paintEvent(self, _ev):
         if len(self._marks) < 2:
@@ -70,8 +118,8 @@ class TimelineRail(QWidget):
         # column of tiny words with no hierarchy; the year is what you navigate by.
         last_year = None
         year_ys = []
-        for row, ym in self._marks:
-            y = self._y_for(row)
+        for px, ym in self._marks:
+            y = self._y_for(px)
             year = ym[:4]
             if year != last_year:
                 year_ys.append((y, year))
@@ -93,40 +141,53 @@ class TimelineRail(QWidget):
                 last_label = y
 
         ac = style.accent(self._accent_key())
-        y = self._y_for(self._row)
+        y = self._y_for(self._pos)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(ac["a"]))
         p.drawRoundedRect(QRectF(right - 11, y - 2.5, 11, 5), 2.5, 2.5)
 
-        # where you would land, spelled out only while you are actually aiming
-        if self._hover_y is not None:
-            label = fmt.month_label(self._month_at(self._row_at(self._hover_y)))
-            if label:
-                f.setPointSizeF(9.0)
-                p.setFont(f)
-                fm2 = QFontMetrics(f)
-                w, h = fm2.horizontalAdvance(label) + 18, fm2.height() + 10
-                by = min(max(3.0, self._hover_y - h / 2), self.height() - h - 3)
-                box = QRectF(right - 13 - w, by, w, h)
-                p.setBrush(QColor(12, 14, 20, 235))
-                p.setPen(QPen(QColor(ac["a"]), 1))
-                p.drawRoundedRect(box, 8, 8)
-                p.setPen(QColor(style.PAL["text"]))
-                p.drawText(box, Qt.AlignCenter, label)
         p.end()
+
+    # The bubble lives on the page, not on the rail: the rail is 54 px wide and
+    # anything wider than that is simply clipped away by its own bounds.
+    def _show_bubble(self, y):
+        label = fmt.month_label(self._month_at(self._px_at(y)))
+        page = self.parentWidget()
+        if not label or page is None:
+            return self._hide_bubble()
+        if self._bubble is None:
+            self._bubble = _RailBubble(page)
+        self._bubble.set_text(label, style.accent(self._accent_key())["a"])
+        w, h = self._bubble.width(), self._bubble.height()
+        top_left = self.mapTo(page, QPoint(0, 0))
+        x = max(4, top_left.x() - w - 8)
+        by = min(max(4, top_left.y() + int(y) - h // 2), page.height() - h - 4)
+        self._bubble.move(x, by)
+        self._bubble.raise_()
+        self._bubble.show()
+
+    def _hide_bubble(self):
+        if self._bubble is not None:
+            self._bubble.hide()
 
     def leaveEvent(self, ev):
         self._hover_y = None
+        self._hide_bubble()
         self.update()
         super().leaveEvent(ev)
 
+    def hideEvent(self, ev):
+        self._hide_bubble()
+        super().hideEvent(ev)
+
     def mousePressEvent(self, ev):
-        self.jump_to.emit(self._row_at(ev.position().y()))
+        self.jump_to.emit(self._px_at(ev.position().y()))
 
     def mouseMoveEvent(self, ev):
         if ev.buttons() & Qt.LeftButton:
-            self.jump_to.emit(self._row_at(ev.position().y()))
-        self._hover_y = ev.position().y()     # draws the month you are aiming at
+            self.jump_to.emit(self._px_at(ev.position().y()))
+        self._hover_y = ev.position().y()     # names the month you are aiming at
+        self._show_bubble(self._hover_y)
         self.update()
 
 
@@ -220,7 +281,7 @@ class GridPage(QWidget):
         body.setSpacing(6)
         body.addWidget(self.view, 1)
         self.rail = TimelineRail(self)
-        self.rail.jump_to.connect(self._scroll_to_row)
+        self.rail.jump_to.connect(self._scroll_to_px)
         body.addWidget(self.rail)
         root.addLayout(body, 1)
         self.view.verticalScrollBar().valueChanged.connect(self._sync_rail)
@@ -364,7 +425,7 @@ class GridPage(QWidget):
         self.lab_sub.setText(f"{fmt.count_label(n)} {fmt.plural(n, 'photo')} · "
                              f"{fmt.human_size(total)}" if n else "No photos to show")
         self.empty.setVisible(n == 0)
-        self.rail.set_marks(self.model.month_marks(), self.model.rowCount())
+        QTimer.singleShot(0, self._refresh_rail)   # after the view lays out
         self._position_overlays()
 
     def refresh_soft(self):
@@ -388,6 +449,8 @@ class GridPage(QWidget):
         self.cfg.set("thumb_px", v, save=False)
         self.view.scheduleDelayedItemsLayout()
         self.view.viewport().update()
+        # a different cell size wraps differently, so every month moves
+        QTimer.singleShot(0, self._refresh_rail)
 
     def _start_slideshow(self):
         photos = self.model.photos()
@@ -401,27 +464,32 @@ class GridPage(QWidget):
                     pos = 0
             self.main.start_slideshow(photos, pos)
 
-    def _scroll_to_row(self, row):
-        ix = self.model.index(max(0, min(row, self.model.rowCount() - 1)))
-        if ix.isValid():
-            self.view.scrollTo(ix, QAbstractItemView.PositionAtTop)
+    def _scroll_to_px(self, px):
+        bar = self.view.verticalScrollBar()
+        bar.setValue(max(bar.minimum(), min(bar.maximum(), int(px))))
+
+    def rail_marks(self):
+        """[(content_y_px, 'YYYY-MM')], full content height -- what the rail draws.
+
+        visualRect is in viewport coordinates, so adding the current scroll
+        value turns it into a position in the whole scrolled content.
+        """
+        bar = self.view.verticalScrollBar()
+        off = bar.value()
+        marks = []
+        for row, ym in self.model.month_marks():
+            r = self.view.visualRect(self.model.index(row, 0))
+            marks.append((max(0, r.y() + off), ym))
+        marks.sort()
+        total = bar.maximum() + self.view.viewport().height()
+        return marks, max(1, total)
+
+    def _refresh_rail(self):
+        self.rail.set_marks(*self.rail_marks())
+        self._sync_rail()
 
     def _sync_rail(self, _v=0):
-        """Report the position as a MODEL ROW, not a pixel fraction.
-
-        The rail draws its month ticks at row positions; a scrollbar fraction is
-        a pixel fraction, and the two are not proportional because day headers
-        are full-width rows among small square cells. Asking the view which item
-        is at the top keeps the marker on the tick it belongs to.
-        """
-        ix = self.view.indexAt(self.view.viewport().rect().topLeft())
-        if not ix.isValid():
-            bar = self.view.verticalScrollBar()
-            span = max(1, bar.maximum() - bar.minimum())
-            frac = (bar.value() - bar.minimum()) / span
-            self.rail.set_row(frac * max(0, self.model.rowCount() - 1))
-            return
-        self.rail.set_row(ix.row())
+        self.rail.set_pos(self.view.verticalScrollBar().value())
 
     # ------- selection / actions -------
     def _selected_items(self):
@@ -474,6 +542,7 @@ class GridPage(QWidget):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._position_overlays()
+        QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
 
     def _position_overlays(self, animate_selbar=False):
         if self.empty.isVisible():
