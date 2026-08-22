@@ -230,7 +230,11 @@ class GridPage(QWidget):
         self.ed_to = QDateEdit()
         self.ed_to.setCalendarPopup(True)
         self.ed_to.setDisplayFormat("yyyy-MM-dd")
-        self.ed_to.setDate(QDate.currentDate())
+        # mirrors "from": the minimum doubles as "no upper bound", which also
+        # means the default cannot go stale when the app outlives the day
+        self.ed_to.setSpecialValueText("—")
+        self.ed_to.setMinimumDate(QDate(2016, 12, 31))
+        self.ed_to.setDate(self.ed_to.minimumDate())
         lay.addWidget(self.ed_to)
 
         lay.addSpacing(8)
@@ -272,9 +276,8 @@ class GridPage(QWidget):
         f = self.filter
         f.date_from = ("" if self.ed_from.date() == self.ed_from.minimumDate()
                        else self.ed_from.date().toString("yyyy-MM-dd"))
-        f.date_to = self.ed_to.date().toString("yyyy-MM-dd")
-        if f.date_to >= QDate.currentDate().toString("yyyy-MM-dd"):
-            f.date_to = ""                    # "up to today" is no constraint
+        f.date_to = ("" if self.ed_to.date() == self.ed_to.minimumDate()
+                     else self.ed_to.date().toString("yyyy-MM-dd"))
         f.instance_type = self.cb_instance.currentData() or ""
         f.min_rating = int(self.cb_rating.currentData() or 0)
         f.media = self.cb_media.currentData() or ""
@@ -282,7 +285,7 @@ class GridPage(QWidget):
 
     def _clear_filters(self):
         self.ed_from.setDate(self.ed_from.minimumDate())
-        self.ed_to.setDate(QDate.currentDate())
+        self.ed_to.setDate(self.ed_to.minimumDate())
         self.cb_instance.setCurrentIndex(0)
         self.cb_rating.setCurrentIndex(0)
         self.cb_media.setCurrentIndex(0)
@@ -300,8 +303,24 @@ class GridPage(QWidget):
         b2 = self.btn_fav.blockSignals(True)
         self.btn_fav.setChecked(f.favorites)
         self.btn_fav.blockSignals(b2)
+        b3 = self.sort_box.blockSignals(True)
+        self.sort_box.setCurrentIndex(0 if f.sort_desc else 1)
+        self.sort_box.blockSignals(b3)
+        self._sync_filter_bar(f)
         self.refresh()
         self.view.setFocus()
+
+    def _sync_filter_bar(self, f):
+        """The bar must show what is actually applied, or Apply is a surprise."""
+        d = QDate.fromString(f.date_from, "yyyy-MM-dd")
+        self.ed_from.setDate(d if d.isValid() else self.ed_from.minimumDate())
+        d = QDate.fromString(f.date_to, "yyyy-MM-dd")
+        self.ed_to.setDate(d if d.isValid() else self.ed_to.minimumDate())
+        for cb, val in ((self.cb_instance, f.instance_type),
+                        (self.cb_rating, f.min_rating),
+                        (self.cb_media, f.media)):
+            ix = cb.findData(val)
+            cb.setCurrentIndex(ix if ix >= 0 else 0)
 
     def refresh(self):
         self.filter.sort_desc = self.sort_box.currentIndex() == 0

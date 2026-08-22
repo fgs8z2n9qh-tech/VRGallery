@@ -176,3 +176,46 @@ def test_search_treats_like_wildcards_as_literal_text(tmp_path):
     assert len(db.query_photos(PhotoFilter(text="100%"))) == 1
     assert db.query_photos(PhotoFilter(text="zzz")) == []
     db.close()
+
+
+def _photo(path, day, **extra):
+    return {"path": path, "folder": ".", "filename": path,
+            "taken_at": f"{day}T10:00:00", "day": day,
+            "filesize": 1, "mtime": 1, **extra}
+
+
+def test_someone_tagged_by_hand_is_findable(tmp_path):
+    """The logs never saw them, but the user drew a box and typed the name."""
+    db = Database(str(tmp_path / "t.db"))
+    db.upsert_photos([_photo("a.png", "2026-01-01"), _photo("b.png", "2026-01-02")])
+    ids = sorted(r["id"] for r in db.query_photos(PhotoFilter()))
+    db.set_photo_tag(ids[0], "Nova", 0.1, 0.1, 0.1, 0.1)
+    assert [r["id"] for r in db.query_photos(PhotoFilter(person="Nova"))] == [ids[0]]
+    assert [r["id"] for r in db.query_photos(PhotoFilter(text="Nov"))] == [ids[0]]
+    db.close()
+
+
+def test_the_contact_sheet_query_returns_what_its_caller_reads(tmp_path):
+    """act_contact_sheet reads is_video, and push_moment reads rating."""
+    db = Database(str(tmp_path / "c.db"))
+    db.upsert_photos([_photo("a.png", "2026-01-01")])
+    row = db.photos_by_ids_full([r["id"] for r in db.query_photos(PhotoFilter())])[0]
+    assert row["is_video"] == 0
+    assert row["rating"] == 0
+    db.close()
+
+
+def test_recordings_stay_out_of_cleanup_and_off_card_covers(tmp_path):
+    db = Database(str(tmp_path / "v.db"))
+    db.upsert_photos([
+        _photo("clip.mp4", "2026-01-01", filesize=900, is_video=1),
+        _photo("shot.png", "2026-01-02", filesize=10),
+    ])
+    # the biggest file is the recording, and it must not be offered for deletion
+    assert [r["path"] for r in db.largest()] == ["shot.png"]
+    by_name = {r["path"]: r["id"] for r in db.query_photos(PhotoFilter())}
+    aid = db.create_album("Trip", "2026-01-03")
+    db.album_add(aid, list(by_name.values()), "2026-01-03")
+    cover = db.albums()[0]["cover_id"]
+    assert cover == by_name["shot.png"]        # never the undecodable clip
+    db.close()

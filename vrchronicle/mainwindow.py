@@ -71,6 +71,10 @@ class MainWindow(QMainWindow):
         self.svc = ThumbService(db, self.bridge, self)
         self.cache = ThumbCache(self.svc, self.bridge, self)
         self._index_worker = None
+        # set before anything that can reach start_index: the tray, the local
+        # API and F5 are all wired below, and none of them may read a photo
+        # while the welcome card is still waiting for an answer
+        self.welcome = None
         self._nav_buttons = {}
         self._current_key = "all"
         self._drill_from = None
@@ -179,8 +183,10 @@ class MainWindow(QMainWindow):
 
         # --no-index keeps a throwaway copy of a library exactly as it is, which
         # is what documentation screenshots need
+        # Not on a first run: the welcome card has not been answered yet, and the
+        # folder it offers to change is the one the watcher would poll.
         self.watcher = None
-        if auto_index:
+        if auto_index and cfg.get("onboarded"):
             self.watcher = LiveWatcher(cfg, self)
             self.watcher.changed.connect(self._on_watch_changed)
 
@@ -205,7 +211,6 @@ class MainWindow(QMainWindow):
 
         self.activate("all")
 
-        self.welcome = None
         if not cfg.get("onboarded"):
             self.welcome = Welcome(self)
             self.welcome.finished.connect(self._finish_onboarding)
@@ -337,6 +342,8 @@ class MainWindow(QMainWindow):
     def start_index(self):
         if not self.auto_index:
             return
+        if self.welcome is not None:
+            return      # nothing is read until the welcome card is accepted
         if self._index_worker and self._index_worker.isRunning():
             return
         if self._index_worker is not None:
@@ -396,20 +403,32 @@ class MainWindow(QMainWindow):
 
     # ---------------- first run / updates ----------------
     def _finish_onboarding(self):
-        if self.welcome is not None:
-            self.welcome.hide()
-            self.welcome.deleteLater()
-            self.welcome = None
-        self.watcher = LiveWatcher(self.cfg, self) if self.auto_index else None
-        if self.watcher is not None:
-            self.watcher.changed.connect(self._on_watch_changed)
+        if self.welcome is None:
+            return                      # a second 'finished' must not re-arm
+        self.welcome.hide()
+        self.welcome.deleteLater()
+        self.welcome = None
+        if self.auto_index:
+            # exactly one watcher, now pointed at the folder just chosen
+            if self.watcher is None:
+                self.watcher = LiveWatcher(self.cfg, self)
+                self.watcher.changed.connect(self._on_watch_changed)
+            else:
+                self.watcher.rearm()
         self.start_index()
 
     def check_for_update(self, announce_when_current=False):
         bridge = self.bridge
 
         def job():
-            tag, url = updates.check()
+            try:
+                tag, url = updates.check()
+            except Exception:
+                # a background thread that raises takes the worker down silently
+                if announce_when_current:
+                    bridge.toast.emit("Could not reach GitHub to check for "
+                                      "updates.", "err")
+                return
             if tag:
                 bridge.update_available.emit(tag, url)
             elif announce_when_current:
@@ -565,8 +584,8 @@ class MainWindow(QMainWindow):
         if self.page_grid.filter.min_rating and stars < self.page_grid.filter.min_rating:
             self.page_grid.refresh()
 
-    def act_tag(self, photo_id, name, x, y):
-        self.db.set_photo_tag(photo_id, name, x, y,
+    def act_tag(self, photo_id, name, x, y, w=0.0, h=0.0):
+        self.db.set_photo_tag(photo_id, name, x, y, w, h,
                               datetime.now().isoformat(timespec="seconds"))
         self.toast(f"Tagged {name}.", "ok")
 
@@ -615,6 +634,10 @@ class MainWindow(QMainWindow):
         threading.Thread(target=fn, daemon=True).start()
 
     def act_share(self, item):
+        if getattr(item, "is_video", False):
+            self.toast("Recordings are usually too big for a webhook — share the "
+                       "file yourself.", "err")
+            return
         url = (self.cfg.get("webhook_url") or "").strip()
         if not url:
             self.toast("Set up your Discord webhook in Settings first.", "err")
@@ -970,9 +993,9 @@ class MainWindow(QMainWindow):
 
     # ---------------- contact sheet / metadata sidecars ----------------
     def act_contact_sheet(self, photo_ids, title, subtitle):
-        rows = self.db.photos_by_ids_full(photo_ids)
+        rows = [r for r in self.db.photos_by_ids_full(photo_ids) if not r["is_video"]]
         if not rows:
-            self.toast("Nothing to lay out.", "err")
+            self.toast("Nothing to lay out — a contact sheet needs photos.", "err")
             return
         export.ensure_export_dir()
         suggested = os.path.join(paths.EXPORT_DIR,

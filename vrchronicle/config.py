@@ -71,9 +71,10 @@ class Config:
             d = paths.default_vrchat_pictures()
             if os.path.isdir(d):
                 self._d["folders"] = [d]
-        # a library that predates the welcome screen has already been set up
-        if not self._d.get("onboarded") and os.path.exists(paths.DB_PATH):
-            self._d["onboarded"] = True
+        # Note: whether the welcome card was already answered is decided in
+        # app.py from what the library actually holds. The mere existence of a
+        # database file proves nothing — the first run creates one before the
+        # user has agreed to anything.
 
     def save(self):
         paths.ensure_dirs()

@@ -17,6 +17,9 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # build the tag we are about to attach to, not the branch head
+          ref: ${{ github.event.inputs.tag || github.ref }}
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -53,6 +56,8 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          # a -rc tag must never become /releases/latest for older clients
+          prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           files: |
             VRChronicle-Setup.zip
             sha256.txt

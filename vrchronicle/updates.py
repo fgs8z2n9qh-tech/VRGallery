@@ -14,8 +14,17 @@ RELEASES_PAGE = "https://github.com/fgs8z2n9qh-tech/VRChronicle/releases/latest"
 
 
 def _parts(version):
-    nums = re.findall(r"\d+", version or "")
-    return tuple(int(n) for n in nums[:4]) or (0,)
+    """(numeric core padded to 4, release flag).
+
+    A '-suffix' sorts *below* the same numeric core, so v1.2.0-rc1 is not
+    "newer" than 1.2.0; '+build' metadata is ignored, as semver says.
+    """
+    v = (version or "").strip()
+    m = re.match(r"v?(\d+(?:\.\d+)*)", v)
+    nums = [int(n) for n in m.group(1).split(".")][:4] if m else [0]
+    nums += [0] * (4 - len(nums))
+    pre = 0 if (m and "-" in v[m.end():]) else 1
+    return tuple(nums) + (pre,)
 
 
 def is_newer(candidate, current):
@@ -34,6 +43,8 @@ def latest(timeout=8):
                 return None, None
             data = json.loads(resp.read(1 << 20).decode("utf-8", "replace"))
     except Exception:
+        return None, None
+    if not isinstance(data, dict):      # a JSON array or string is not an error
         return None, None
     tag = (data.get("tag_name") or "").strip()
     url = (data.get("html_url") or RELEASES_PAGE).strip()

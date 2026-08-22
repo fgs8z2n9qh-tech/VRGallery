@@ -60,9 +60,13 @@ the shutter went. Click a name to see every photo you share with them.
 
 ### Tagging people in the frame
 
-Press **T**, click where somebody is, and pick a name — the people the logs say were
-in that instance are offered first, so it is usually one click. Hovering a marker
-names them, the way a photo tag works anywhere else.
+Press **T** and drag a box around somebody's head, then pick a name — the people the
+logs say were in that instance are offered first, so it is usually one click. A plain
+click instead of a drag drops a head-sized box you can redraw later.
+
+The boxes stay out of the way: the photo looks untouched, with only a small badge in
+the corner counting who is tagged. Point at somebody and their name appears, the way a
+photo tag works anywhere else. Click the badge to see everyone at once.
 
 ![People tagged in a photo](docs/10-tags.png)
 

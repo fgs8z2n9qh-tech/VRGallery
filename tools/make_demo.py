@@ -266,7 +266,9 @@ def main():
 
     con = sqlite3.connect(dst_db)
     names = set()
-    for table in ("photo_players", "session_players"):
+    # photo_tags matters most of all: those names are the ones drawn ON the
+    # screenshot in docs/, not just listed in a side panel
+    for table in ("photo_players", "session_players", "photo_tags"):
         names |= {r[0] for r in con.execute(f"SELECT DISTINCT name FROM {table}")}
     names |= {r[0] for r in con.execute("SELECT DISTINCT player FROM avatar_events")}
     # aliases must stay unique: photo_players has a UNIQUE(photo_id, name) key,
@@ -283,6 +285,7 @@ def main():
     for real, fake in mapping.items():
         con.execute("UPDATE photo_players SET name=? WHERE name=?", (fake, real))
         con.execute("UPDATE session_players SET name=? WHERE name=?", (fake, real))
+        con.execute("UPDATE photo_tags SET name=? WHERE name=?", (fake, real))
         con.execute("UPDATE avatar_events SET player=? WHERE player=?", (fake, real))
     # avatar names are often "<real name> <something>", so they go too
     avatars = {r[0] for r in con.execute(

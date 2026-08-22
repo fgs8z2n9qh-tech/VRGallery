@@ -6,7 +6,7 @@ import faulthandler
 APP_NAME = "VRChronicle"
 APP_TAGLINE = "VRChat photo album"
 APP_ID = "VRChronicle.Desktop"      # AppUserModelID: taskbar grouping identity
-APP_VERSION = "1.2.0"
+APP_VERSION = "1.2.1"
 _LEGACY_NAMES = ("Aperture",)     # data dirs from before the rename
 
 APPDIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_NAME)
@@ -97,10 +97,14 @@ def pretty(path):
     """
     if not path:
         return ""
-    home = os.path.expanduser("~")
+    home = os.path.normpath(os.path.expanduser("~"))
     p = os.path.normpath(str(path))
-    if p.lower().startswith(os.path.normpath(home).lower()):
-        return "%USERPROFILE%" + p[len(os.path.normpath(home)):]
+    if os.path.normcase(p) == os.path.normcase(home):
+        return "%USERPROFILE%"
+    # match on a path boundary: C:\Users\Erikson is not inside C:\Users\Erik
+    prefix = home if home.endswith(os.sep) else home + os.sep
+    if os.path.normcase(p).startswith(os.path.normcase(prefix)):
+        return "%USERPROFILE%" + os.sep + p[len(prefix):]
     return p
 
 

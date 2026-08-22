@@ -75,6 +75,10 @@ def main(argv=None):
     cfg = Config()
     app.setStyleSheet(style.build_qss(cfg.get("accent")))
     db = Database()
+    # A library with photos in it predates the welcome card, so don't ask again.
+    # Quitting before answering leaves an empty database, and must ask again.
+    if not cfg.get("onboarded") and db.counts()[0] > 0:
+        cfg.set("onboarded", True)
     win = MainWindow(app, cfg, db, auto_index=not args.no_index)
 
     geo = cfg.get("window")
@@ -108,6 +112,15 @@ def main(argv=None):
                     win.open_lightbox(win.page_grid, photos, 0)
                 if key == "lightbox-tags":
                     win.lightbox.viewer.set_show_all_tags(True)
+            elif key == "lightbox-hover":
+                # simulate pointing at the first tag, for documentation shots
+                photos = win.page_grid.model.photos()
+                if photos:
+                    win.open_lightbox(win.page_grid, photos, 0)
+                v = win.lightbox.viewer
+                if v._tags:
+                    v._hover_tag = 0
+                    v.update()
             elif key.startswith("person:"):         # e.g. person:The_Woozoo
                 win.show_person(key.split(":", 1)[1])
             elif key.startswith("cleanup:"):        # e.g. cleanup:dupes

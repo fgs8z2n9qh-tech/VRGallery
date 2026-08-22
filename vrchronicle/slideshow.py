@@ -36,10 +36,15 @@ class Slideshow(QWidget):
         self.setMouseTracking(True)
 
     def start(self, items, pos=0):
-        if not items:
+        items = list(items)
+        # recordings are never decoded, so a video in the list would hold the
+        # previous frame on screen under its own caption. Drop them, and keep
+        # the caller's starting item by remapping its index.
+        keep = [i for i, it in enumerate(items) if not getattr(it, "is_video", False)]
+        if not keep:
             return
-        self.items = list(items)
-        self.pos = max(0, min(pos, len(items) - 1))
+        self.pos = next((n for n, i in enumerate(keep) if i >= pos), 0)
+        self.items = [items[i] for i in keep]
         self._pm = None
         self._prev_pm = None
         self._paused = False

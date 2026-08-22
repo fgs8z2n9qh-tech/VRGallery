@@ -50,15 +50,20 @@ CREATE INDEX IF NOT EXISTS idx_pp_name ON photo_players(name);
 
 -- where in the frame somebody is: x/y are fractions of the image, so they
 -- survive resizing, cropping-free re-encoding and any display size
+-- x/y is the top-left of the box and w/h its size, all as fractions of the
+-- image, so a tag keeps its place at any zoom, window size or re-encode
 CREATE TABLE IF NOT EXISTS photo_tags(
   id INTEGER PRIMARY KEY,
   photo_id INTEGER NOT NULL,
   name TEXT NOT NULL,
   x REAL NOT NULL,
   y REAL NOT NULL,
+  w REAL DEFAULT 0,
+  h REAL DEFAULT 0,
   created_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_tags_photo ON photo_tags(photo_id);
+CREATE INDEX IF NOT EXISTS idx_tags_name ON photo_tags(name);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_uniq ON photo_tags(photo_id, name);
 
 CREATE TABLE IF NOT EXISTS albums(
@@ -157,6 +162,12 @@ class Database:
                           ("is_video", "INTEGER DEFAULT 0")):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {decl}")
+        have_t = {r["name"] for r in self._conn.execute("PRAGMA table_info(photo_tags)")}
+        if have_t:                       # tags started life as a bare point
+            for col in ("w", "h"):
+                if col not in have_t:
+                    self._conn.execute(
+                        f"ALTER TABLE photo_tags ADD COLUMN {col} REAL DEFAULT 0")
         have_s = {r["name"] for r in self._conn.execute("PRAGMA table_info(sessions)")}
         for col, decl in (("instance_type", "TEXT"), ("region", "TEXT")):
             if col not in have_s:
@@ -396,8 +407,12 @@ class Database:
             where.append("p.day=?")
             params.append(f.day)
         if f.person:
-            where.append("EXISTS(SELECT 1 FROM photo_players pp WHERE pp.photo_id=p.id AND pp.name=?)")
-            params.append(f.person)
+            # somebody hand-tagged in the frame counts too, even when the logs
+            # never saw them (an old photo, a name typed in by hand)
+            where.append(
+                "(EXISTS(SELECT 1 FROM photo_players pp WHERE pp.photo_id=p.id AND pp.name=?)"
+                " OR EXISTS(SELECT 1 FROM photo_tags pt WHERE pt.photo_id=p.id AND pt.name=?))")
+            params += [f.person, f.person]
         if f.avatar:
             where.append("p.avatar_name=?")
             params.append(f.avatar)
@@ -432,8 +447,10 @@ class Database:
             where.append(
                 "(p.world_name LIKE ? ESCAPE '\\' OR p.filename LIKE ? ESCAPE '\\' "
                 "OR EXISTS(SELECT 1 FROM photo_players pp WHERE pp.photo_id=p.id "
-                "AND pp.name LIKE ? ESCAPE '\\'))")
-            params += [like, like, like]
+                "AND pp.name LIKE ? ESCAPE '\\') "
+                "OR EXISTS(SELECT 1 FROM photo_tags pt WHERE pt.photo_id=p.id "
+                "AND pt.name LIKE ? ESCAPE '\\'))")
+            params += [like, like, like, like]
         return " AND ".join(where), params
 
     def query_photos(self, f: PhotoFilter):
@@ -506,11 +523,12 @@ class Database:
     # ---------- in-frame tags ----------
 
     def photo_tags(self, photo_id):
+        """[(name, x, y, w, h)] — box in image fractions."""
         with self._lock:
             rows = self._conn.execute(
-                "SELECT name, x, y FROM photo_tags WHERE photo_id=? ORDER BY name",
+                "SELECT name, x, y, w, h FROM photo_tags WHERE photo_id=? ORDER BY name",
                 (photo_id,)).fetchall()
-        return [(r["name"], r["x"], r["y"]) for r in rows]
+        return [(r["name"], r["x"], r["y"], r["w"] or 0.0, r["h"] or 0.0) for r in rows]
 
     def tags_for_photos(self, ids):
         ids = [i for i in ids if i]
@@ -519,20 +537,23 @@ class Database:
         q = ",".join("?" * len(ids))
         with self._lock:
             rows = self._conn.execute(
-                f"SELECT photo_id, name, x, y FROM photo_tags WHERE photo_id IN ({q})",
-                list(ids)).fetchall()
+                f"SELECT photo_id, name, x, y, w, h FROM photo_tags "
+                f"WHERE photo_id IN ({q})", list(ids)).fetchall()
         out = {}
         for r in rows:
-            out.setdefault(r["photo_id"], []).append((r["name"], r["x"], r["y"]))
+            out.setdefault(r["photo_id"], []).append(
+                (r["name"], r["x"], r["y"], r["w"] or 0.0, r["h"] or 0.0))
         return out
 
-    def set_photo_tag(self, photo_id, name, x, y, when=""):
-        """Placing the same name twice moves the existing marker."""
+    def set_photo_tag(self, photo_id, name, x, y, w=0.0, h=0.0, when=""):
+        """Placing the same name twice moves and resizes the existing box."""
+        vals = (float(x), float(y), float(w), float(h))
         with self._lock:
             self._conn.execute(
-                "INSERT INTO photo_tags(photo_id, name, x, y, created_at) "
-                "VALUES(?,?,?,?,?) ON CONFLICT(photo_id, name) DO UPDATE SET x=?, y=?",
-                (photo_id, name, float(x), float(y), when, float(x), float(y)))
+                "INSERT INTO photo_tags(photo_id, name, x, y, w, h, created_at) "
+                "VALUES(?,?,?,?,?,?,?) "
+                "ON CONFLICT(photo_id, name) DO UPDATE SET x=?, y=?, w=?, h=?",
+                (photo_id, name) + vals + (when,) + vals)
             self._conn.commit()
 
     def remove_photo_tag(self, photo_id, name):
@@ -562,7 +583,7 @@ class Database:
             return self._conn.execute(
                 """SELECT a.id, a.name, COUNT(ap.photo_id) AS cnt,
                        (SELECT p.id FROM album_photos ap2 JOIN photos p ON p.id=ap2.photo_id
-                        WHERE ap2.album_id=a.id AND p.missing=0
+                        WHERE ap2.album_id=a.id AND p.missing=0 AND p.is_video=0
                         ORDER BY p.taken_at DESC LIMIT 1) AS cover_id
                    FROM albums a LEFT JOIN album_photos ap ON ap.album_id=a.id
                    GROUP BY a.id ORDER BY a.name COLLATE NOCASE""").fetchall()
@@ -632,7 +653,8 @@ class Database:
                         (SELECT p2.world_name FROM photos p2 WHERE p2.world_id=p.world_id
                           AND p2.world_name IS NOT NULL ORDER BY p2.taken_at DESC LIMIT 1) name,
                         (SELECT p3.id FROM photos p3 WHERE p3.world_id=p.world_id
-                          AND p3.missing=0 ORDER BY p3.taken_at DESC LIMIT 1) cover_id
+                          AND p3.missing=0 AND p3.is_video=0
+              ORDER BY p3.taken_at DESC LIMIT 1) cover_id
                    FROM photos p
                    WHERE p.missing=0 AND p.world_id IS NOT NULL
                    GROUP BY p.world_id ORDER BY cnt DESC""").fetchall()
@@ -647,7 +669,7 @@ class Database:
             return self._conn.execute(
                 f"""SELECT pp.name, COUNT(DISTINCT pp.photo_id) cnt, MAX(p.taken_at) last,
                         (SELECT p2.id FROM photos p2 JOIN photo_players q ON q.photo_id=p2.id
-                          WHERE q.name=pp.name AND p2.missing=0
+                          WHERE q.name=pp.name AND p2.missing=0 AND p2.is_video=0
                           ORDER BY p2.taken_at DESC LIMIT 1) cover_id
                    FROM photo_players pp JOIN photos p ON p.id=pp.photo_id
                    WHERE p.missing=0{ex}
@@ -658,7 +680,8 @@ class Database:
             return self._conn.execute(
                 """SELECT p.avatar_name name, COUNT(*) cnt, MAX(p.taken_at) last,
                         (SELECT p2.id FROM photos p2 WHERE p2.avatar_name=p.avatar_name
-                          AND p2.missing=0 ORDER BY p2.taken_at DESC LIMIT 1) cover_id
+                          AND p2.missing=0 AND p2.is_video=0
+              ORDER BY p2.taken_at DESC LIMIT 1) cover_id
                    FROM photos p
                    WHERE p.missing=0 AND p.avatar_name IS NOT NULL AND p.avatar_name != ''
                    GROUP BY p.avatar_name ORDER BY cnt DESC""").fetchall()
@@ -672,6 +695,7 @@ class Database:
                         COUNT(p.id) cnt, COALESCE(SUM(p.filesize),0) bytes,
                         MIN(p.taken_at) first_shot, MAX(p.taken_at) last_shot,
                         (SELECT p2.id FROM photos p2 WHERE p2.session_id=s.id AND p2.missing=0
+               AND p2.is_video=0
                           ORDER BY p2.favorite DESC, p2.taken_at LIMIT 1) cover_id
                    FROM sessions s JOIN photos p ON p.session_id=s.id AND p.missing=0
                    GROUP BY s.id ORDER BY s.start_at DESC LIMIT ?""", (limit,)).fetchall()
@@ -870,7 +894,8 @@ class Database:
             return self._conn.execute(
                 f"SELECT id, path, taken_at, day, world_id, world_name, favorite, width, "
                 f"height, filesize, meta_source, mtime, avatar_name, session_id, "
-                f"instance_type FROM photos WHERE id IN ({q}) ORDER BY taken_at",
+                f"instance_type, rating, is_video "
+                f"FROM photos WHERE id IN ({q}) ORDER BY taken_at",
                 list(ids)).fetchall()
 
     def all_photo_paths(self):
@@ -965,7 +990,7 @@ class Database:
                         p.dhash, p.world_id,
                         (SELECT COUNT(*) FROM photo_players pp WHERE pp.photo_id=p.id) np
                    FROM photos p
-                   WHERE p.missing=0 AND substr(p.day,1,4)=?
+                   WHERE p.missing=0 AND p.is_video=0 AND substr(p.day,1,4)=?
                      AND (p.luma IS NULL OR p.luma > 18)
                    ORDER BY p.favorite DESC, np DESC, p.taken_at DESC LIMIT ?""",
                 (str(year), limit)).fetchall()
@@ -988,16 +1013,20 @@ class Database:
                 "ORDER BY taken_at DESC", (luma_max,)).fetchall()
 
     def photos_time_ordered(self):
+        # burst detection is about the camera being held down; a recording that
+        # happens to start mid-burst is not part of it
         with self._lock:
             return self._conn.execute(
-                "SELECT id, path, taken_at, day, world_name, favorite, filesize, mtime, dhash "
-                "FROM photos WHERE missing=0 AND taken_at IS NOT NULL ORDER BY taken_at").fetchall()
+                "SELECT id, path, taken_at, day, world_name, favorite, filesize, mtime, "
+                "dhash FROM photos WHERE missing=0 AND is_video=0 AND taken_at IS NOT NULL "
+                "ORDER BY taken_at").fetchall()
 
     def largest(self, limit=200):
         with self._lock:
             return self._conn.execute(
                 "SELECT id, path, taken_at, day, world_name, favorite, filesize, mtime "
-                "FROM photos WHERE missing=0 ORDER BY filesize DESC LIMIT ?", (limit,)).fetchall()
+                "FROM photos WHERE missing=0 AND is_video=0 "
+                "ORDER BY filesize DESC LIMIT ?", (limit,)).fetchall()
 
     # ---------- meta kv ----------
 

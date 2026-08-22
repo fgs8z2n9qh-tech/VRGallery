@@ -1,1 +1,3 @@
-__version__ = "1.0.0"
+from .paths import APP_VERSION as __version__      # one source of truth
+
+__all__ = ["__version__"]

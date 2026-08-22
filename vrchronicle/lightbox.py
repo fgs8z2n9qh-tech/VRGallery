@@ -34,30 +34,41 @@ class ImageView(QWidget):
     on any social app; in tagging mode a click places one instead.
     """
 
-    tag_placed = Signal(float, float)     # image-space fraction
+    tag_placed = Signal(float, float, float, float)   # box in image fractions
+    tag_context = Signal(str)                         # right-clicked somebody's box
     tag_clicked = Signal(str)
 
-    HIT_PX = 26
+    DEFAULT_BOX = 0.11        # fraction of image width when you just click
+    MIN_BOX = 0.02            # anything smaller was a click, not a drag
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._tags = []            # (name, x, y)
+        self._tags = []            # (name, x, y, w, h)
         self._hover_tag = -1
         self._show_all_tags = False
         self._tagging = False
+        self._draw_from = None     # drag origin while drawing a box
+        self._draw_to = None
+        self._pinned_tag = -1      # a tag whose label the user clicked to keep open
         self._pm = None
         self._message = ""
         self._zoom = 1.0        # 1.0 == fitted
         self._center = QPointF(0.5, 0.5)   # visible center in image fractions
         self._dragging = False
         self._last = None
+        self._want_tagging = False   # asked for before the image finished loading
         self.setCursor(Qt.ArrowCursor)
+        # without this Qt only sends mouseMoveEvent while a button is held, and
+        # pointing at somebody would never reveal their name
+        self.setMouseTracking(True)
 
     def set_pixmap(self, pm):
         self._pm = pm
         self._message = ""
         self._zoom = 1.0
         self._center = QPointF(0.5, 0.5)
+        if self._want_tagging:       # T was pressed while the photo was decoding
+            self.set_tagging(True)
         self.update()
 
     def show_message(self, text):
@@ -73,6 +84,10 @@ class ImageView(QWidget):
     def set_tags(self, tags):
         self._tags = list(tags or [])
         self._hover_tag = -1
+        self._pinned_tag = -1
+        self._draw_from = self._draw_to = None
+        # the pointer has not moved, so nothing will clear a stale one for us
+        self.setToolTip("")
         self.update()
 
     def set_show_all_tags(self, on):
@@ -80,7 +95,11 @@ class ImageView(QWidget):
         self.update()
 
     def set_tagging(self, on):
-        self._tagging = bool(on)
+        self._want_tagging = bool(on)
+        self._tagging = bool(on) and self._pm is not None
+        on = self._tagging
+        if on:
+            self.setToolTip("")     # the badge is gone; its tooltip must go too
         self.setCursor(Qt.CrossCursor if on else
                        (Qt.OpenHandCursor if self._zoom > 1 else Qt.ArrowCursor))
         self.update()
@@ -106,12 +125,72 @@ class ImageView(QWidget):
             return None
         return QPointF(r.x() + x * r.width(), r.y() + y * r.height())
 
+    def default_box(self):
+        """A head-sized box: square on screen, so the fractions differ by aspect.
+
+        Clamped, because on an extreme panorama a square would be taller than
+        the photo itself.
+        """
+        w = self.DEFAULT_BOX
+        if self._pm and self._pm.height():
+            h = w * (self._pm.width() / self._pm.height())
+            if h > 1.0:                      # wider than about 9:1
+                return min(1.0, w / h), 1.0
+            return w, h
+        return w, w
+
+    def _tag_box(self, tag):
+        """Widget-space rectangle for a stored tag, tolerating legacy points."""
+        r = self._image_rect()
+        if r is None:
+            return None
+        _name, x, y, w, h = tag
+        if w <= 0 or h <= 0:                 # written before tags had a size
+            w, h = self.default_box()
+            x, y = x - w / 2, y - h / 2      # the old value was the centre
+            x = max(0.0, min(1.0 - w, x))    # and it could sit near an edge
+            y = max(0.0, min(1.0 - h, y))
+        return QRectF(r.x() + x * r.width(), r.y() + y * r.height(),
+                      w * r.width(), h * r.height())
+
+    def _badge_visible(self):
+        """The badge is a real control, so it is on screen whenever it works."""
+        return bool(self._tags) and not self._tagging and self._pm is not None
+
+    def _badge_rect(self):
+        r = self._image_rect()
+        if r is None or not self._badge_visible():
+            return None
+        w, h = 60, 30
+        return QRectF(max(6.0, r.x() + 12),
+                      min(self.height() - h - 6, r.bottom() - h - 12), w, h)
+
+    def _paint_tag_badge(self, p, fm):
+        box = self._badge_rect()
+        if box is None:
+            return
+        # lit while everyone is shown, so it never looks like it vanished
+        on = self._show_all_tags
+        p.setPen(QPen(QColor(255, 255, 255, 60), 1) if on else Qt.NoPen)
+        p.setBrush(QColor(style.ACTIVE["a"]) if on else QColor(12, 14, 20, 190))
+        p.drawRoundedRect(box, 15, 15)
+        fg = "#0b0e14" if on else "#e9ecf5"
+        glyph = icons.pixmap("users", fg, 15, self.devicePixelRatioF())
+        p.drawPixmap(int(box.x() + 11), int(box.center().y() - 7.5), glyph)
+        p.setPen(QColor(fg))
+        p.drawText(QRectF(box.x() + 30, box.y(), 24, box.height()),
+                   Qt.AlignCenter, str(len(self._tags)))
+
     def _tag_at(self, pos):
-        for i, (_name, x, y) in enumerate(self._tags):
-            pt = self._tag_point(x, y)
-            if pt is not None and (pt - pos).manhattanLength() <= self.HIT_PX:
-                return i
-        return -1
+        # topmost first, so a small box drawn inside a big one stays reachable
+        best, best_area = -1, None
+        for i, tag in enumerate(self._tags):
+            box = self._tag_box(tag)
+            if box is not None and box.adjusted(-4, -4, 4, 4).contains(pos):
+                area = box.width() * box.height()
+                if best_area is None or area < best_area:
+                    best, best_area = i, area
+        return best
 
     def paintEvent(self, _ev):
         p = QPainter(self)
@@ -133,39 +212,59 @@ class ImageView(QWidget):
         p.end()
 
     def _paint_tags(self, p):
-        if not self._tags:
-            return
         from PySide6.QtGui import QFont, QFontMetrics
         f = QFont()
         f.setPointSizeF(9.5)
         f.setWeight(QFont.DemiBold)
         fm = QFontMetrics(f)
         p.setFont(f)
+
+        # the box being dragged out right now
+        if self._draw_from is not None and self._draw_to is not None:
+            live = QRectF(self._draw_from, self._draw_to).normalized()
+            p.setPen(QPen(QColor(255, 255, 255, 230), 2, Qt.DashLine))
+            p.setBrush(QColor(255, 255, 255, 24))
+            p.drawRoundedRect(live, 6, 6)
+
+        # Boxes stay out of the way: the photo is the point. A small badge says
+        # the photo has tags, and pointing at somebody names them.
         show_all = self._show_all_tags or self._tagging
-        for i, (name, x, y) in enumerate(self._tags):
-            pt = self._tag_point(x, y)
-            if pt is None:
-                continue
-            hovered = (i == self._hover_tag)
-            # the dot is always there so a photo announces it has tags
-            p.setPen(QPen(QColor(255, 255, 255, 230), 2))
-            p.setBrush(QColor(0, 0, 0, 110))
-            r = 9 if hovered else 6
-            p.drawEllipse(pt, r, r)
+        for i, tag in enumerate(self._tags):
+            box = self._tag_box(tag)
+            if box is None or not box.intersects(QRectF(self.rect())):
+                continue        # scrolled off: no outline, and no orphan label
+            name = tag[0]
+            hovered = (i == self._hover_tag) or (i == self._pinned_tag)
             if not (hovered or show_all):
                 continue
+            # a dark stroke underneath, so the box is still visible against a
+            # snowy world or a white sky
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(0, 0, 0, 90 if hovered else 60),
+                          4.4 if hovered else 3.4))
+            p.drawRoundedRect(box, 6, 6)
+            p.setPen(QPen(QColor(255, 255, 255, 235 if hovered else 170),
+                          2.4 if hovered else 1.6))
+            p.setBrush(QColor(255, 255, 255, 22) if hovered else Qt.NoBrush)
+            p.drawRoundedRect(box, 6, 6)
             tw = fm.horizontalAdvance(name)
-            bw, bh = tw + 20, fm.height() + 12
-            bx = min(max(6.0, pt.x() - bw / 2), self.width() - bw - 6)
-            by = pt.y() + 16
+            bw, bh = tw + 20, fm.height() + 10
+            bx = min(max(6.0, box.center().x() - bw / 2), self.width() - bw - 6)
+            by = box.bottom() + 8
             if by + bh > self.height() - 6:
-                by = pt.y() - 16 - bh
-            box = QRectF(bx, by, bw, bh)
+                by = box.top() - 8 - bh
+            # zoomed in far enough, the box swallows the viewport and neither
+            # position is on screen — the name still has to be readable
+            by = min(max(6.0, by), self.height() - bh - 6)
+            label = QRectF(bx, by, bw, bh)
             p.setPen(Qt.NoPen)
-            p.setBrush(QColor(12, 14, 20, 225))
-            p.drawRoundedRect(box, 8, 8)
+            p.setBrush(QColor(12, 14, 20, 228))
+            p.drawRoundedRect(label, 8, 8)
             p.setPen(QColor(233, 236, 245))
-            p.drawText(box, Qt.AlignCenter, name)
+            p.drawText(label, Qt.AlignCenter, name)
+
+        # last, so a box drawn over the corner can never hide the control
+        self._paint_tag_badge(p, fm)
 
     def wheelEvent(self, ev):
         if not self._pm:
@@ -197,29 +296,60 @@ class ImageView(QWidget):
         if self._tagging and self._pm:
             r = self._image_rect()
             if r is not None and r.contains(ev.position()):
-                fx = (ev.position().x() - r.x()) / max(1.0, r.width())
-                fy = (ev.position().y() - r.y()) / max(1.0, r.height())
-                self.tag_placed.emit(fx, fy)
+                self._draw_from = ev.position()
+                self._draw_to = ev.position()
+                self.update()
+            return
+        badge = self._badge_rect()
+        if badge is not None and badge.contains(ev.position()):
+            self.set_show_all_tags(not self._show_all_tags)
             return
         hit = self._tag_at(ev.position())
         if hit >= 0:
-            self.tag_clicked.emit(self._tags[hit][0])
-            return
+            # clicking a box keeps its name on screen — it must not navigate
+            # away, which would close the photo you are looking at
+            self._pinned_tag = -1 if self._pinned_tag == hit else hit
+            self._hover_tag = hit
+            self.update()
+        else:
+            self._pinned_tag = -1
+        # panning still has to work: zoomed in far enough a single box can cover
+        # the whole viewport, and then every press would land on it
         if self._zoom > 1.0:
             self._dragging = True
             self._last = ev.position()
             self.setCursor(Qt.ClosedHandCursor)
 
+    def contextMenuEvent(self, ev):
+        """Right-clicking somebody's box is how you get rid of it."""
+        if self._tagging:
+            return
+        hit = self._tag_at(QPointF(ev.pos()))
+        if hit < 0:
+            return
+        self._hover_tag = hit          # keep the name up while the menu is open
+        self.update()
+        ev.accept()
+        self.tag_context.emit(self._tags[hit][0])
+
     def mouseMoveEvent(self, ev):
+        if self._draw_from is not None:
+            self._draw_to = ev.position()
+            self.update()
+            return
         if not self._dragging:
             hit = self._tag_at(ev.position())
+            badge = self._badge_rect()
+            over_badge = badge is not None and badge.contains(ev.position())
             if hit != self._hover_tag:
                 self._hover_tag = hit
-                if not self._tagging:
-                    self.setCursor(Qt.PointingHandCursor if hit >= 0 else
-                                   (Qt.OpenHandCursor if self._zoom > 1
-                                    else Qt.ArrowCursor))
                 self.update()
+            if not self._tagging:
+                self.setCursor(Qt.PointingHandCursor if (hit >= 0 or over_badge) else
+                               (Qt.OpenHandCursor if self._zoom > 1
+                                else Qt.ArrowCursor))
+                self.setToolTip("Hide everyone" if over_badge and self._show_all_tags
+                                else "Show everyone tagged" if over_badge else "")
         if self._dragging and self._pm:
             d = ev.position() - self._last
             self._last = ev.position()
@@ -231,6 +361,34 @@ class ImageView(QWidget):
                 self.update()
 
     def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.LeftButton and self._draw_from is not None:
+            start, end = self._draw_from, ev.position()
+            self._draw_from = self._draw_to = None
+            self.update()
+            r = self._image_rect()
+            if r is None:
+                return
+            # a drag that overshoots into the letterbox must not become a box
+            # covering the whole photo
+            box = QRectF(start, end).normalized().intersected(r)
+            fx = (box.x() - r.x()) / max(1.0, r.width())
+            fy = (box.y() - r.y()) / max(1.0, r.height())
+            fw = box.width() / max(1.0, r.width())
+            fh = box.height() / max(1.0, r.height())
+            if fw < self.MIN_BOX or fh < self.MIN_BOX:
+                # a plain click means "a head goes here", not a zero-size box.
+                # anchor on the press, which is always on the image
+                dw, dh = self.default_box()
+                cx = (start.x() - r.x()) / max(1.0, r.width())
+                cy = (start.y() - r.y()) / max(1.0, r.height())
+                fx, fy, fw, fh = cx - dw / 2, cy - dh / 2, dw, dh
+            # keep the box on the image
+            fw = min(fw, 1.0)
+            fh = min(fh, 1.0)
+            fx = max(0.0, min(1.0 - fw, fx))
+            fy = max(0.0, min(1.0 - fh, fy))
+            self.tag_placed.emit(fx, fy, fw, fh)
+            return
         if ev.button() == Qt.LeftButton and self._dragging:
             self._dragging = False
             self.setCursor(Qt.OpenHandCursor if self._zoom > 1 else Qt.ArrowCursor)
@@ -256,6 +414,8 @@ class Lightbox(QWidget):
         self.pos = 0
         self._cache = OrderedDict()      # path -> QPixmap (few full-size)
         self._pending = set()
+        self._retag_name = ""            # whose box is being redrawn, if any
+        self._retag_for = None           # ...and on which photo it was started
         self._sig = _LoaderSignals()
         self._sig.loaded.connect(self._on_loaded)
         self.setFocusPolicy(Qt.StrongFocus)
@@ -297,7 +457,7 @@ class Lightbox(QWidget):
 
         self.viewer = ImageView()
         self.viewer.tag_placed.connect(self._place_tag)
-        self.viewer.tag_clicked.connect(self._person_clicked)
+        self.viewer.tag_context.connect(self._tag_menu)
         left.addWidget(self.viewer, 1)
 
         bottom = QHBoxLayout()
@@ -389,7 +549,10 @@ class Lightbox(QWidget):
         self.p_tags_head.setObjectName("SectionLabel")
         self.tags_holder = QWidget()
         self.tags_lay = widgets.FlowLayout(self.tags_holder, 0, 6, 6)
-        self.p_tags_hint = QLabel("Right-click a tag to remove it")
+        self.p_tags_hint = QLabel("Point at somebody in the photo to see their name. "
+                                  "Right-click their box to move or remove it · "
+                                  "click a name here to open their photos")
+        self.p_tags_hint.setWordWrap(True)
         self.p_tags_hint.setObjectName("LbKey")
 
         self.p_people_head = QLabel("WHO WAS THERE")
@@ -550,7 +713,7 @@ class Lightbox(QWidget):
             if w and w.widget():
                 w.widget().deleteLater()
         tags = self.main.db.photo_tags(it.id)
-        for name, _x, _y in tags:
+        for name, _x, _y, _w, _h in tags:
             b = QPushButton(name)
             b.setObjectName("Chip")
             b.setCursor(Qt.PointingHandCursor)
@@ -652,19 +815,66 @@ class Lightbox(QWidget):
     # ---------- in-frame tags ----------
     def _toggle_tagging(self, on):
         self.viewer.set_tagging(on)
-        if on:
-            self.main.toast("Click where somebody is in the photo.", "info")
+        if not on:
+            self._retag_name = ""
+            self._retag_for = None
+        elif self._retag_name:
+            self.main.toast(f"Drag the new box for {self._retag_name}.", "info")
+        else:
+            self.main.toast("Drag a box around someone's head — or just click for a "
+                            "default-sized one.", "info")
+
+    def _tag_menu(self, name):
+        """Right-clicked a box on the photo: open, redraw, or remove it."""
+        from PySide6.QtGui import QCursor
+        from PySide6.QtWidgets import QMenu
+        m = QMenu(self)
+        a_open = m.addAction(icons.qicon("users", style.PAL["dim"], 16),
+                             f"Open {name}'s photos")
+        a_move = m.addAction(icons.qicon("edit", style.PAL["dim"], 16),
+                             "Redraw this box")
+        m.addSeparator()
+        a_del = m.addAction(icons.qicon("trash", style.PAL["danger"], 16),
+                            f"Remove the tag for {name}")
+        chosen = m.exec(QCursor.pos())
+        if chosen is a_del:
+            self._remove_tag(name)
+        elif chosen is a_open:
+            self._person_clicked(name)
+        elif chosen is a_move:
+            it = self.current()
+            self._retag_name = name
+            self._retag_for = it.id if it else None
+            self.btn_tag.setChecked(True)
 
     def _load_tags(self):
         it = self.current()
         self.viewer.set_tags(self.main.db.photo_tags(it.id) if it else [])
+        # a half-finished "redraw" must not follow you to the next photo, not
+        # even when that photo happens to have somebody of the same name on it
+        if self._retag_name and (not it or it.id != self._retag_for):
+            self._retag_name = ""
+            self._retag_for = None
+            self.btn_tag.setChecked(False)
 
-    def _place_tag(self, fx, fy):
+    def _place_tag(self, fx, fy, fw, fh):
         it = self.current()
-        if not it:
+        if not it or getattr(it, "is_video", False):
+            return
+        if self._retag_name and it.id == self._retag_for:
+            name, self._retag_name = self._retag_name, ""   # name already known
+            self._retag_for = None
+            self.main.act_tag(it.id, name, fx, fy, fw, fh)
+            self._load_tags()
+            self._fill_panel(it)
+            self.btn_tag.setChecked(False)
+            self.main.toast(f"Moved the box for {name}.", "ok")
+            return
+        anchor = self.viewer._tag_point(fx + fw / 2, fy + fh)
+        if anchor is None:            # the image is not on screen yet
             return
         from PySide6.QtWidgets import QInputDialog, QMenu
-        taken = {n for n, _x, _y in self.main.db.photo_tags(it.id)}
+        taken = {t[0] for t in self.main.db.photo_tags(it.id)}
         # people the logs already say were in this instance come first: usually
         # the answer is one of them, and typing a VRChat name is a chore
         _row, players = self.main.db.photo(it.id)
@@ -683,8 +893,7 @@ class Lightbox(QWidget):
             menu.addSeparator()
         other = menu.addAction(icons.qicon("plus", style.PAL["dim"], 16),
                                "Someone else…")
-        chosen = menu.exec(self.viewer.mapToGlobal(
-            self.viewer._tag_point(fx, fy).toPoint()))
+        chosen = menu.exec(self.viewer.mapToGlobal(anchor.toPoint()))
         if chosen is None:
             return
         if chosen is other:
@@ -694,8 +903,9 @@ class Lightbox(QWidget):
                 return
         else:
             name = chosen.data()
-        self.main.act_tag(it.id, name, fx, fy)
+        self.main.act_tag(it.id, name, fx, fy, fw, fh)
         self._load_tags()
+        self._fill_panel(it)
 
     def _remove_tag(self, name):
         it = self.current()

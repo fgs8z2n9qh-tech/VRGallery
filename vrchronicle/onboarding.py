@@ -4,6 +4,7 @@ The app's whole trick is parsing VRChat's logs, and "an app that reads your
 VRChat logs" deserves an explanation rather than a silent scan.
 """
 import os
+import time
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (QFileDialog, QFrame, QHBoxLayout, QLabel, QVBoxLayout,
@@ -107,20 +108,30 @@ class Welcome(QWidget):
         folders = self.main.cfg.folders
         folder = folders[0] if folders else ""
         has_folder = bool(folder) and os.path.isdir(folder)
+        # This runs while the window is being built, so it is bounded on all
+        # three axes: a OneDrive or UNC tree of near-empty folders would
+        # otherwise walk for minutes and the app would look hung.
         count = 0
+        capped = False
+        errs = []
         if has_folder:
-            try:
-                for _root, _dirs, files in os.walk(folder):
-                    count += len(files)
-                    if count > 5000:
-                        break
-            except OSError:
-                pass
-        self.rows.addWidget(self._row(
-            has_folder, "Screenshot folder",
-            (f"{paths.pretty(folder)} — about {count}{'+' if count > 5000 else ''} files"
-             if has_folder else
-             "Not found. Take a photo in VRChat once, or pick the folder yourself.")))
+            deadline = time.monotonic() + 1.0
+            dirs_seen = 0
+            for _root, _dirs, files in os.walk(folder, onerror=errs.append):
+                count += len(files)
+                dirs_seen += 1
+                if count > 5000 or dirs_seen >= 2000 or time.monotonic() > deadline:
+                    capped = True
+                    break
+        unreadable = bool(errs) and count == 0
+        if not has_folder:
+            detail = "Not found. Take a photo in VRChat once, or pick the folder yourself."
+        elif unreadable:
+            detail = f"{paths.pretty(folder)} — could not be read ({errs[0].strerror})"
+        else:
+            detail = f"{paths.pretty(folder)} — about {count}{'+' if capped else ''} files"
+        self.rows.addWidget(self._row(has_folder and not unreadable,
+                                      "Screenshot folder", detail))
 
         logs = vrclog.find_logs()
         self.rows.addWidget(self._row(

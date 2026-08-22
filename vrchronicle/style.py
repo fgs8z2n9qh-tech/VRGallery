@@ -34,6 +34,11 @@ def accent(cfg_accent):
     return ACCENTS.get(cfg_accent, ACCENTS[DEFAULT_ACCENT])
 
 
+# the accent currently applied, for the few things painted by hand rather than
+# by the stylesheet
+ACTIVE = ACCENTS[DEFAULT_ACCENT]
+
+
 def mix(hex_color, alpha):
     """#rrggbb -> rgba() string."""
     h = hex_color.lstrip("#")
@@ -54,7 +59,8 @@ def _arrow_url():
 
 
 def build_qss(accent_key=DEFAULT_ACCENT):
-    ac = accent(accent_key)
+    global ACTIVE
+    ac = ACTIVE = accent(accent_key)
     A, B = ac["a"], ac["b"]
     P = PAL
     arrow = _arrow_url()
