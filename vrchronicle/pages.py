@@ -1040,18 +1040,24 @@ class StatsPage(QWidget):
             self.c_day.set(f'{s["busiest"]["c"]} photos', f"busiest day · {d}")
         else:
             self.c_day.set("–", "busiest day")
-        if year:
-            months = s["months"][-24:]
-            self.card_months.set_title("PHOTOS PER MONTH")
-            self.chart_months.set_data([(fmt.month_label(m["m"]), m["c"]) for m in months])
-        else:
-            # "All time" should actually show all of time: a hundred month bars
-            # would be unreadable, so the whole library is grouped by year
-            per_year = {}          # months arrive sorted, so years come out sorted
-            for m in s["months"]:
-                per_year[m["m"][:4]] = per_year.get(m["m"][:4], 0) + m["c"]
-            self.card_months.set_title("PHOTOS PER YEAR")
-            self.chart_months.set_data(list(per_year.items()))
+        # Every month there is, whichever level you are on. The January of each
+        # year carries the year instead of a month name, so a run of four years
+        # of bars still tells you where you are.
+        self.card_months.set_title("PHOTOS PER MONTH")
+        bars = []
+        for m in s["months"]:
+            try:
+                mon = int(m["m"][5:7])
+            except ValueError:
+                bars.append((m["m"], m["c"], False))
+                continue
+            jan = mon == 1
+            bars.append((m["m"][:4] if jan else fmt.MONTHS_SHORT[mon - 1],
+                         m["c"], bool(jan)))
+        if bars and not bars[0][2]:
+            # the run does not start in January, so say which year it starts in
+            bars[0] = (fmt.month_label(s["months"][0]["m"]), bars[0][1], True)
+        self.chart_months.set_data(bars)
         self.chart_worlds.set_data([(w["name"] or "?", w["c"]) for w in s["top_worlds"]])
         self.chart_people.set_data([(p["name"], p["c"]) for p in s["top_people"]])
         self.chart_hours.set_data(s["hours"])

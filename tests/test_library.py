@@ -208,6 +208,20 @@ def test_statistics_can_be_narrowed_to_one_year(tmp_path):
     db.close()
 
 
+def test_every_month_survives_into_the_all_time_chart(tmp_path):
+    """The chart used to be capped, so older years were simply not on it."""
+    db = Database(str(tmp_path / "m.db"))
+    rows = []
+    for year in (2023, 2024, 2025, 2026):
+        for month in range(1, 13):
+            rows.append(_photo(f"{year}{month:02d}.png", f"{year}-{month:02d}-05"))
+    db.upsert_photos(rows)
+    months = db.stats([])["months"]
+    assert len(months) == 48
+    assert months[0]["m"] == "2023-01" and months[-1]["m"] == "2026-12"
+    db.close()
+
+
 def test_the_contact_sheet_query_returns_what_its_caller_reads(tmp_path):
     """act_contact_sheet reads is_video, and push_moment reads rating."""
     db = Database(str(tmp_path / "c.db"))

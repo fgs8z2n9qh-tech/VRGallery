@@ -112,18 +112,50 @@ def test_the_year_picker_actually_changes_the_statistics(window):
     assert page.cb_year.itemData(0) == ""            # "All time" comes first
     assert page.cb_year.count() > 1, "the library's year is missing"
 
-    # "All time" groups the whole library by year, not by month
+    # "All time" shows every month there is, with each January carrying the year
     assert page.selected_year() == ""
-    assert page.card_months._title.text() == "PHOTOS PER YEAR"
+    assert page.card_months._title.text() == "PHOTOS PER MONTH"
+    all_bars = list(page.chart_months.data)
+    assert all_bars and all(len(b) == 3 for b in all_bars)
 
     before = page.lab_sub.text()
     page.cb_year.setCurrentIndex(1)                  # pick the only real year
     assert page.card_months._title.text() == "PHOTOS PER MONTH"
+    assert len(page.chart_months.data) <= len(all_bars)
     assert page.selected_year() == page.cb_year.currentText()
     assert page.lab_sub.text() != before, "picking a year changed nothing"
     assert page.lab_sub.text().startswith(page.selected_year())
     # and the poster button names the year it would build
     assert page.btn_year.text() == f"{page.poster_year()} in review"
+
+
+def test_every_statistics_chart_actually_paints(window):
+    """Setting a chart's data is not proof that it can draw it.
+
+    A shape change to BarChart's data slipped through a suite that only ever
+    called set_data, and blew up in paintEvent on screen.
+    """
+    from PySide6.QtGui import QPixmap
+    rows = []
+    for year in (2024, 2025, 2026):
+        for month in range(1, 13):
+            day = f"{year}-{month:02d}-05"
+            rows.append({"path": f"/c/{year}{month}.png", "folder": "/c",
+                         "filename": f"VRChat_{day}_10-00-00.000.png",
+                         "taken_at": f"{day}T10:00:00", "day": day,
+                         "filesize": 10, "mtime": 1.0})
+    window.db.upsert_photos(rows)
+    window.activate("stats")
+    page = window.page_stats
+    for year_ix in (0, 1):                       # All time, then one year
+        page.cb_year.setCurrentIndex(year_ix)
+        for chart in (page.chart_months, page.chart_worlds, page.chart_people,
+                      page.chart_hours, page.chart_avatars, page.chart_instances,
+                      page.chart_regions):
+            chart.resize(900, 200)
+            target = QPixmap(chart.size())
+            chart.render(target)                 # raises if paintEvent throws
+            assert not target.isNull()
 
 
 def test_the_timeline_rail_lands_on_the_month_it_shows(window, app):

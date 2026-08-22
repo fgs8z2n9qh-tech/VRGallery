@@ -12,7 +12,12 @@ def _accent_pair(cfg):
 
 
 class BarChart(QWidget):
-    """Vertical bars, e.g. photos per month. data: [(label, value)]."""
+    """Vertical bars, e.g. photos per month.
+
+    data: [(label, value)] or [(label, value, anchor)]. An anchor label is
+    always drawn and drawn brighter -- with four years of months on one strip
+    the January of each year is what makes the whole run readable.
+    """
 
     def __init__(self, cfg, parent=None):
         super().__init__(parent)
@@ -40,12 +45,14 @@ class BarChart(QWidget):
         p.setFont(f)
         bottom = self.height() - 22
         top = 16
-        maxv = max(v for _l, v in self.data) or 1
+        maxv = max(row[1] for row in self.data) or 1
         n = len(self.data)
         gap = 5
         bw = max(4.0, (self.width() - gap * (n + 1)) / n)
         label_every = max(1, int(46 / (bw + gap)) + (0 if bw >= 40 else 1))
-        for i, (label, v) in enumerate(self.data):
+        for i, row in enumerate(self.data):
+            label, v = row[0], row[1]
+            anchor = len(row) > 2 and row[2]
             x = gap + i * (bw + gap)
             h = (bottom - top) * (v / maxv)
             rect = QRectF(x, bottom - h, bw, h)
@@ -56,12 +63,14 @@ class BarChart(QWidget):
             r = min(4.0, bw / 2)
             path.addRoundedRect(rect, r, r)
             p.fillPath(path, g)
-            if v and bw >= 18:
+            count = fmt.count_label(v)
+            # only when it fits between its neighbours, or the numbers collide
+            if v and fm.horizontalAdvance(count) <= bw + gap - 2:
                 p.setPen(QColor(style.PAL["dim"]))
                 p.drawText(QRectF(x - 10, rect.top() - 15, bw + 20, 13),
-                           Qt.AlignCenter, fmt.count_label(v))
-            if i % label_every == 0:
-                p.setPen(QColor(style.PAL["faint"]))
+                           Qt.AlignCenter, count)
+            if anchor or i % label_every == 0:
+                p.setPen(QColor(style.PAL["dim"] if anchor else style.PAL["faint"]))
                 p.drawText(QRectF(x - 14, bottom + 5, bw + 28, 14), Qt.AlignCenter, label)
         p.end()
 
