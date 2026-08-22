@@ -288,6 +288,7 @@ class PhotoDelegate(QStyledItemDelegate):
         self.cell_w = 176
         self.radius = 12
         self.dense = False
+        self._tiles = OrderedDict()      # (id, w, h, dpr, radius) -> ready pixmap
         self._accent = style.ACCENTS["orchid"]["a"]
         self._f_head = QFont()
         self._f_head.setPointSizeF(10.5)
@@ -303,11 +304,51 @@ class PhotoDelegate(QStyledItemDelegate):
 
     def set_cell_width(self, w):
         self.cell_w = int(w)
+        self._tiles.clear()
 
     def set_dense(self, on):
         """Continuous mode: square tiles that divide the row exactly."""
         self.dense = bool(on)
         self.radius = 3 if self.dense else 12
+        self._tiles.clear()
+
+    def drop_tile(self, pid):
+        for key in [k for k in self._tiles if k[0] == pid]:
+            self._tiles.pop(key, None)
+
+    def _tile(self, item, pm, w, h):
+        """A tile ready to blit: scaled to the cell and already rounded.
+
+        Doing the rounded clip and the downscale inside every paint was most of
+        the cost of a scrolling frame, and neither changes between frames.
+        """
+        dpr = self.view.devicePixelRatioF()
+        key = (item.id, w, h, round(dpr, 2), self.radius)
+        hit = self._tiles.get(key)
+        if hit is not None:
+            self._tiles.move_to_end(key)
+            return hit
+        out = QPixmap(int(w * dpr), int(h * dpr))
+        out.setDevicePixelRatio(dpr)
+        out.fill(QColor(0, 0, 0, 0))
+        q = QPainter(out)
+        q.setRenderHint(QPainter.Antialiasing, True)
+        q.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        rf = QRectF(0, 0, w, h)
+        path = QPainterPath()
+        path.addRoundedRect(rf, self.radius, self.radius)
+        q.setClipPath(path)
+        q.fillRect(rf, QColor(style.PAL["surface2"]))
+        pw, ph = pm.width(), pm.height()
+        scale = max(rf.width() / pw, rf.height() / ph)
+        dw, dh = pw * scale, ph * scale
+        q.drawPixmap(QRectF((rf.width() - dw) / 2, (rf.height() - dh) / 2, dw, dh),
+                     pm, QRectF(0, 0, pw, ph))
+        q.end()
+        self._tiles[key] = out
+        while len(self._tiles) > 600:
+            self._tiles.popitem(last=False)
+        return out
 
     # --- geometry ---
     def cell_size(self):
@@ -464,14 +505,18 @@ class PhotoDelegate(QStyledItemDelegate):
                     self.view.viewport().update()
             pw, ph = pm.width(), pm.height()
             if pw > 0 and ph > 0:
-                p.fillRect(r, QColor(style.PAL["surface2"]))
-                p.setOpacity(alpha)
-                scale = max(rf.width() / pw, rf.height() / ph) * zoom
-                dw, dh = pw * scale, ph * scale
-                dx = rf.x() + (rf.width() - dw) / 2
-                dy = rf.y() + (rf.height() - dh) / 2
-                p.drawPixmap(QRectF(dx, dy, dw, dh), pm, QRectF(0, 0, pw, ph))
-                p.setOpacity(1.0)
+                if alpha >= 1.0 and zoom == 1.0:
+                    # the common case: everything about it is already decided
+                    p.drawPixmap(r.topLeft(), self._tile(item, pm, r.width(), r.height()))
+                else:
+                    p.fillRect(r, QColor(style.PAL["surface2"]))
+                    p.setOpacity(alpha)
+                    scale = max(rf.width() / pw, rf.height() / ph) * zoom
+                    dw, dh = pw * scale, ph * scale
+                    dx = rf.x() + (rf.width() - dw) / 2
+                    dy = rf.y() + (rf.height() - dh) / 2
+                    p.drawPixmap(QRectF(dx, dy, dw, dh), pm, QRectF(0, 0, pw, ph))
+                    p.setOpacity(1.0)
         if hovered or selected:
             veil = QColor(255, 255, 255, 14 if hovered and not selected else 10)
             p.fillRect(r, veil)

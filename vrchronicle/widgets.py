@@ -1,7 +1,11 @@
 """Small reusable UI pieces: flow layout, toast, cards, empty state, buttons."""
+import math
+import time
+
 from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
                             QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer)
-from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
+from PySide6.QtGui import (QColor, QGuiApplication, QLinearGradient, QPainter,
+                           QPainterPath, QPen)
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
@@ -20,7 +24,8 @@ class Glass:
     """
 
     RADIUS = 22          # roughly, in screen pixels
-    MARGIN = 28          # sample past the edges, so they blur from real content
+    MARGIN = 20          # sample past the edges, so they blur from real content
+    TTL = 0.033          # seconds a sampled backdrop may be reused
 
     @staticmethod
     def _blur(pm, radius=RADIUS):
@@ -43,9 +48,23 @@ class Glass:
         return small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
     @staticmethod
-    def backdrop(widget, source):
+    def backdrop(widget, source, ttl=None):
+        """Sample and blur what is under `widget`.
+
+        Cached for a few tens of milliseconds: while the grid is scrolling this
+        runs on every frame, and re-grabbing and re-blurring each time cost more
+        than everything else on the frame put together. A backdrop this heavily
+        blurred does not read as stale at 30 samples a second.
+        """
         if source is None or not source.isVisible():
             return None, None
+        ttl = Glass.TTL if ttl is None else ttl
+        now = time.perf_counter()
+        cached = getattr(widget, "_glass_cache", None)
+        if cached is not None:
+            when, size, pm, off = cached
+            if now - when < ttl and size == widget.size():
+                return pm, off
         # Global coordinates, not mapTo: the panel floats over a widget that is
         # usually a sibling's child, and mapTo only works towards an ancestor.
         try:
@@ -62,7 +81,9 @@ class Glass:
             return None, None
         blurred = Glass._blur(pm)
         # where the sample sits relative to the widget's own origin
-        return blurred, QPoint(area.x() - top_left.x(), area.y() - top_left.y())
+        off = QPoint(area.x() - top_left.x(), area.y() - top_left.y())
+        widget._glass_cache = (now, widget.size(), blurred, off)
+        return blurred, off
 
     @staticmethod
     def paint(p, widget, source, radius=16, tint=None, tint_alpha=150):
@@ -99,16 +120,32 @@ class SmoothScroll(QObject):
     timer walks the bar towards it, so a fast flick glides rather than stepping.
     """
 
-    def __init__(self, view, step=170, ease=0.22, parent=None):
+    TAU = 0.085          # seconds: the glide's time constant, not a per-tick share
+
+    def __init__(self, view, step=170, parent=None):
         super().__init__(parent or view)
         self.view = view
         self.step = step
-        self.ease = ease
         self._target = None
+        self._pos = None          # float, so small per-frame moves do not round to 0
+        self._last = 0.0
         self._timer = QTimer(self)
-        self._timer.setInterval(16)          # ~60 fps
+        self._timer.setTimerType(Qt.PreciseTimer)
         self._timer.timeout.connect(self._tick)
+        self._retune()
         view.viewport().installEventFilter(self)
+
+    def _retune(self):
+        """Run at the display's own rate: 16 ms is a stutter on a 144 Hz panel."""
+        hz = 60.0
+        try:
+            scr = self.view.screen() or QGuiApplication.primaryScreen()
+            if scr and scr.refreshRate() > 1:
+                hz = float(scr.refreshRate())
+        except Exception:
+            pass
+        self.hz = max(60.0, min(240.0, hz))
+        self._timer.setInterval(max(4, int(round(1000.0 / self.hz))))
 
     def eventFilter(self, obj, ev):
         try:
@@ -141,30 +178,43 @@ class SmoothScroll(QObject):
         if self._target == bar.value():
             self._target = None
             return True
+        if self._pos is None:
+            self._pos = float(bar.value())
         if not self._timer.isActive():
+            self._retune()                   # the window may be on another screen
+            self._last = time.perf_counter()
             self._timer.start()
         return True
 
     def stop(self):
         self._timer.stop()
         self._target = None
+        self._pos = None
 
     def _tick(self):
+        now = time.perf_counter()
+        dt = min(0.05, max(0.0, now - self._last))
+        self._last = now
+        self._step(dt)
+
+    def _step(self, dt):
+        """One frame of glide. Time-based, so a faster display is smoother
+        rather than quicker -- a fixed share per tick would just arrive sooner
+        the more often it ran."""
         try:
             bar = self.bar()
         except RuntimeError:
             self._timer.stop()
             return
-        if self._target is None:
+        if self._target is None or self._pos is None:
             self._timer.stop()
             return
-        cur = bar.value()
-        gap = self._target - cur
-        if abs(gap) <= 1:
+        self._pos += (self._target - self._pos) * (1.0 - math.exp(-dt / self.TAU))
+        if abs(self._target - self._pos) < 0.5:
             bar.setValue(self._target)
             self.stop()
             return
-        bar.setValue(int(cur + gap * self.ease + (1 if gap > 0 else -1)))
+        bar.setValue(int(round(self._pos)))
 
 
 class GlassBar(QFrame):

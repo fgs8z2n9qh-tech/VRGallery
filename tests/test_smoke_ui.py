@@ -460,6 +460,43 @@ def test_all_shows_one_continuous_sheet_of_photos(window, app):
     window.hide()
 
 
+def test_scrolling_does_not_redo_work_it_can_keep(window, app):
+    """Both of these ran on every frame and neither changes between frames."""
+    from PySide6.QtTest import QTest
+    from vrchronicle.widgets import Glass
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    # the frosted backdrop is sampled at most every TTL, not every repaint
+    page.headbar._glass_cache = None
+    first, _off = Glass.backdrop(page.headbar, page.view.viewport())
+    again, _off = Glass.backdrop(page.headbar, page.view.viewport())
+    assert first is again, "the backdrop was sampled twice in one frame"
+    again, _off = Glass.backdrop(page.headbar, page.view.viewport(), ttl=0)
+    assert again is not first, "ttl=0 must force a fresh sample"
+
+    # a tile is rounded and scaled once, then blitted
+    d = page.delegate
+    d._tiles.clear()
+    item = page.model.photos()[0]
+    from PySide6.QtGui import QPixmap
+    pm = QPixmap(400, 225)
+    pm.fill()
+    a = d._tile(item, pm, 176, 99)
+    b = d._tile(item, pm, 176, 99)
+    assert a is b, "the tile was rebuilt for the same cell size"
+    assert d._tile(item, pm, 200, 112) is not a, "a new size needs a new tile"
+    d.set_cell_width(190)
+    assert not d._tiles, "changing the thumbnail size must drop them"
+    window.hide()
+
+
 def test_the_wheel_glides_instead_of_jumping(window, app):
     """One notch used to move the bar in a single step."""
     from PySide6.QtCore import QPoint, QPointF, Qt
@@ -488,17 +525,35 @@ def test_the_wheel_glides_instead_of_jumping(window, app):
     assert smooth._target == smooth.step, "the notch did not set a target"
     assert bar.value() == 0, "the bar must not jump to it in one step"
 
+    # walk the animation with a fake clock, one 120 Hz frame at a time
+    frame = 1.0 / 120.0
     seen = []
-    for _ in range(40):                       # walk the animation by hand
-        smooth._tick()
+    for _ in range(400):
+        smooth._step(frame)
         seen.append(bar.value())
         if smooth._target is None:
             break
-    assert len(seen) > 4, f"it arrived in {len(seen)} steps, that is a jump"
+    assert len(seen) > 8, f"it arrived in {len(seen)} frames, that is a jump"
     assert seen == sorted(seen), "it must only move one way"
     assert seen[-1] == smooth.step
-    # decelerating: the first step is the biggest
+    # decelerating: the first frame moves further than the last
     assert seen[0] - 0 > seen[-1] - seen[-2]
+
+    # Time-based, not per-tick: a faster display gives MORE frames over the
+    # same span, not a quicker arrival.
+    def frames_at(hz):
+        bar.setValue(0)
+        smooth.stop()
+        smooth._target, smooth._pos = smooth.step, 0.0
+        n = 0
+        while smooth._target is not None and n < 2000:
+            smooth._step(1.0 / hz)
+            n += 1
+        return n
+    slow, fast = frames_at(60), frames_at(144)
+    assert fast > slow * 2, f"144Hz gave {fast} frames vs {slow} at 60Hz"
+    assert abs(fast / 144.0 - slow / 60.0) < 0.05, "the glide changed duration"
+    assert 60.0 <= smooth.hz <= 240.0
 
     # ctrl+wheel still zooms rather than scrolling
     before = page.slider.value()
