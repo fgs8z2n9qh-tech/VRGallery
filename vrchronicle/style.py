@@ -130,7 +130,7 @@ QPushButton#IconBtn {{
 QPushButton#IconBtn:hover {{ background: {P['hover']}; }}
 QPushButton#IconBtn:checked {{ background: {mix(A, 0.18)}; }}
 QPushButton#PillBtn {{
-    background: {P['surface2']}; border: 1px solid {P['border']};
+    background: {mix('#1c2130', 0.62)}; border: 1px solid {mix('#262c3d', 0.8)};
     border-radius: 14px; padding: 5px 12px; color: {P['dim']};
     /* the same weight checked and unchecked: a bolder label needs more room
        than the button was measured for, and the text ends up clipped */
@@ -155,7 +155,16 @@ QLineEdit {{
     selection-background-color: {mix(A, 0.45)};
 }}
 QLineEdit:focus {{ border-color: {A}; }}
-QLineEdit#SearchBox {{ border-radius: 16px; padding: 7px 12px 7px 32px; }}
+/* the header floats over the photos, so its controls are translucent too --
+   a solid fill there would punch opaque holes in the glass */
+QLineEdit#SearchBox {{
+    border-radius: 16px; padding: 7px 12px 7px 32px;
+    background: {mix('#161a26', 0.55)}; border-color: {mix('#303748', 0.7)};
+}}
+QLineEdit#SearchBox:focus {{ background: {mix('#161a26', 0.8)}; }}
+#GlassBarChild QComboBox, QComboBox#OnGlass {{
+    background: {mix('#161a26', 0.55)}; border-color: {mix('#303748', 0.7)};
+}}
 QSpinBox {{
     background: {P['surface']}; border: 1px solid {P['border']};
     border-radius: 8px; padding: 5px 8px;

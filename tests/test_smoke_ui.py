@@ -315,6 +315,56 @@ def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
     window.hide()
 
 
+def test_the_grid_scrolls_under_the_floating_header(window, app):
+    """The header is glass, so the photos have to actually be behind it.
+
+    The grid fills the page and a spacer row of the header's height keeps the
+    first day from starting life hidden underneath.
+    """
+    from PySide6.QtCore import QPoint
+    from PySide6.QtTest import QTest
+    from vrchronicle.gridmodel import KIND_SPACER, KindRole
+    from vrchronicle.widgets import Glass
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    h = page.head_height()
+    assert h > 20
+    assert page.model.index(0, 0).data(KindRole) == KIND_SPACER
+    # the view reaches the top of the page: there is content under the header
+    assert page.view.mapTo(page, QPoint(0, 0)).y() == 0
+    assert page.headwrap.geometry().top() == 0
+
+    # nothing is hidden at rest: the first real row starts below the header
+    first = page.view.visualRect(page.model.index(1, 0))
+    assert first.top() >= h - 2, "the first day would sit under the header"
+
+    # scrolled, photos really are behind the bar, and the glass samples them
+    bar = page.view.verticalScrollBar()
+    bar.setValue(int(bar.maximum() * 0.3))
+    app.processEvents()
+    vw = page.view.viewport().width()
+    behind = None
+    for y in range(4, h, 3):                 # the layout has gaps; probe a few points
+        for x in (12, vw // 3, vw // 2):
+            ix = page.view.indexAt(QPoint(x, y))
+            if ix.isValid():
+                behind = ix
+                break
+        if behind is not None:
+            break
+    assert behind is not None, "nothing scrolled under the header"
+    blurred, offset = Glass.backdrop(page.headbar, page.view.viewport())
+    assert blurred is not None and not blurred.isNull()
+    window.hide()
+
+
 def test_the_floating_panels_render_their_glass(window, app):
     """Glass samples a sibling's content, which mapTo cannot address.
 
@@ -430,22 +480,32 @@ def test_browsing_zooms_from_years_to_months_to_days(window, app):
     page = window.page_grid
     assert not page.levels.isHidden(), "the level control belongs on Photos"
 
+    def cards(page):
+        """(index, payload) for the period cards, skipping the header spacer."""
+        out = []
+        for r in range(page.model.rowCount()):
+            ix = page.model.index(r, 0)
+            if ix.data(KindRole) == KIND_PERIOD:
+                out.append((ix, ix.data(ItemRole)))
+        return out
+
+    def card_for(page, key):
+        for ix, d in cards(page):
+            if d["key"] == key:
+                return ix
+        raise AssertionError(f"no card for {key}")
+
     page.set_level("year")
-    kinds = [page.model.index(r, 0).data(KindRole) for r in range(page.model.rowCount())]
-    assert kinds and set(kinds) == {KIND_PERIOD}
-    years = [page.model.index(r, 0).data(ItemRole)["label"]
-             for r in range(page.model.rowCount())]
-    assert years == ["2026", "2025", "2024"]      # newest first, incl. the fixture photo
+    got = cards(page)
+    assert [d["label"] for _ix, d in got] == ["2026", "2025", "2024"]  # newest first
     # the photo-only controls step aside at this level
     assert page.slider.isHidden() and page.sort_box.isHidden()
 
-    page._open_from_index(page.model.index(2, 0))     # click 2024
+    page._open_from_index(card_for(page, "2024"))
     assert page.level == "month" and page._level_year == "2024"
-    months = [page.model.index(r, 0).data(ItemRole)["key"]
-              for r in range(page.model.rowCount())]
-    assert months == ["2024-07", "2024-03"]
+    assert [d["key"] for _ix, d in cards(page)] == ["2024-07", "2024-03"]
 
-    page._open_from_index(page.model.index(1, 0))     # click March 2024
+    page._open_from_index(card_for(page, "2024-03"))
     assert page.level == "day"
     assert page.filter.date_from == "2024-03-01"
     assert page.filter.date_to == "2024-03-31"

@@ -34,12 +34,12 @@ At the Days level the day you are inside stays pinned to the top while you scrol
 right edge jumps through the years — point at it and it names the month you would
 land on.
 
-The small panels that float over your photos — the selection bar, the rail's month
-bubble, notifications — are frosted glass: each samples what is underneath, blurs it
-and tints it, so the panel belongs to the photo it is sitting on rather than covering
-it up. The pinned day header is deliberately solid: it spans the full width while the
-photos under it do not, and glass there is half smeared picture and half flat
-background.
+The grid scrolls **underneath** the page header, and the header is frosted glass: it
+samples the photos behind it, blurs them and tints them, so the toolbar belongs to the
+library rather than sitting in a band above it. The selection bar, the rail's month
+bubble and notifications are made of the same material. The pinned day header is
+deliberately solid: it spans the full width while the photos under it do not, and glass
+there is half smeared picture and half flat background.
 
 ![Frosted panels over the grid](docs/12-glass.png)
 

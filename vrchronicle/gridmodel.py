@@ -16,6 +16,8 @@ ItemRole = Qt.UserRole + 2
 KIND_HEADER = 0
 KIND_PHOTO = 1
 KIND_PERIOD = 2       # a year or month card at the zoomed-out browsing levels
+KIND_SPACER = 3       # blank full-width row: the content scrolls under a floating
+                      # header, so it needs somewhere to start
 
 
 class PhotoItem:
@@ -135,11 +137,13 @@ class GridModel(QAbstractListModel):
         self._by_id = {}           # pid -> model row
         self._photos = []          # PhotoItem list in display order
 
-    def set_photos(self, db_rows, group_by_day=True):
+    def set_photos(self, db_rows, group_by_day=True, top_gap=0):
         self.beginResetModel()
         self._rows = []
         self._by_id = {}
         self._photos = []
+        if top_gap:
+            self._rows.append((KIND_SPACER, top_gap))
         if group_by_day:
             counts = {}
             for r in db_rows:
@@ -161,12 +165,14 @@ class GridModel(QAbstractListModel):
                 self._rows.append((KIND_PHOTO, item))
         self.endResetModel()
 
-    def set_periods(self, rows, level, covers):
+    def set_periods(self, rows, level, covers, top_gap=0):
         """Year or month cards. rows: db.period_summary; covers: id -> photo row."""
         self.beginResetModel()
         self._rows = []
         self._by_id = {}
         self._photos = []
+        if top_gap:
+            self._rows.append((KIND_SPACER, top_gap))
         for r in rows:
             key = r["k"]
             label = key if level == "year" else fmt.month_label(key)
@@ -196,7 +202,9 @@ class GridModel(QAbstractListModel):
         if not index.isValid():
             return Qt.NoItemFlags
         kind, _ = self._rows[index.row()]
-        if kind == KIND_HEADER:
+        if kind in (KIND_HEADER, KIND_SPACER):
+            # NoItemFlags on a row inside an IconMode QListView crashes the
+            # native layout; a header is enabled-but-not-selectable and works
             return Qt.ItemIsEnabled
         return Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
@@ -205,7 +213,7 @@ class GridModel(QAbstractListModel):
         if not (0 <= row < len(self._rows)):
             return None
         kind, payload = self._rows[row]
-        if kind == KIND_PERIOD:
+        if kind in (KIND_PERIOD, KIND_SPACER):
             return None
         day = payload[0] if kind == KIND_HEADER else payload.day
         if not day:
@@ -226,6 +234,8 @@ class GridModel(QAbstractListModel):
         marks = []
         last = None
         for row, (kind, payload) in enumerate(self._rows):
+            if kind == KIND_SPACER:      # a blank row has no date of its own
+                continue
             day = payload[0] if kind == KIND_HEADER else payload.day
             ym = (day or "")[:7]
             if ym and ym != last:
@@ -306,6 +316,9 @@ class PhotoDelegate(QStyledItemDelegate):
 
     def sizeHint(self, option, index):
         kind = index.data(KindRole)
+        if kind == KIND_SPACER:
+            vw = self.view.viewport().width()
+            return QSize(max(80, vw - 24), max(1, int(index.data(ItemRole) or 1)))
         if kind == KIND_HEADER:
             vw = self.view.viewport().width()
             return QSize(max(80, vw - 24), 46)
@@ -319,6 +332,9 @@ class PhotoDelegate(QStyledItemDelegate):
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        if kind == KIND_SPACER:
+            painter.restore()
+            return
         if kind == KIND_HEADER:
             self._paint_header(painter, option, index)
         elif kind == KIND_PERIOD:

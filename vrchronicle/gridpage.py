@@ -272,11 +272,15 @@ class GridPage(QWidget):
         self._levels_on = False     # only the Photos page browses by period
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
 
-        # --- header ---
-        head = QHBoxLayout()
+        # The header floats over the grid so the photos scroll underneath it and
+        # show through the glass. The grid gets a spacer row of the same height
+        # so nothing starts life hidden behind it.
+        self.headbar = widgets.GlassBar(self)
+        head = QHBoxLayout(self.headbar)
+        head.setContentsMargins(24, 10, 24, 10)
         head.setSpacing(10)
         self.btn_back = widgets.icon_btn("arrow-left", "Back", style.PAL["text"], px=19)
         self.btn_back.clicked.connect(self.back_requested)
@@ -335,6 +339,7 @@ class GridPage(QWidget):
         head.addWidget(self.btn_fav)
 
         self.sort_box = QComboBox()
+        self.sort_box.setObjectName("OnGlass")
         self.sort_box.addItems(["Newest first", "Oldest first"])
         self.sort_box.currentIndexChanged.connect(self._on_sort)
         head.addWidget(self.sort_box)
@@ -354,8 +359,13 @@ class GridPage(QWidget):
         self.btn_play = widgets.icon_btn("play", "Slideshow", style.PAL["dim"])
         self.btn_play.clicked.connect(self._start_slideshow)
         head.addWidget(self.btn_play)
-        root.addLayout(head)
-        root.addWidget(self._build_filter_bar())
+        # header + filter bar ride together as one floating overlay
+        self.headwrap = QWidget(self)
+        hw = QVBoxLayout(self.headwrap)
+        hw.setContentsMargins(0, 0, 0, 0)
+        hw.setSpacing(0)
+        hw.addWidget(self.headbar)
+        hw.addWidget(self._build_filter_bar())
 
         # --- grid ---
         self.model = GridModel(self)
@@ -367,7 +377,7 @@ class GridPage(QWidget):
         self.view.setItemDelegate(self.delegate)
 
         body = QHBoxLayout()
-        body.setContentsMargins(0, 0, 0, 0)
+        body.setContentsMargins(0, 0, 6, 0)
         body.setSpacing(6)
         body.addWidget(self.view, 1)
         self.rail = TimelineRail(self)
@@ -389,6 +399,7 @@ class GridPage(QWidget):
         self.empty = widgets.EmptyState("image", "Nothing here",
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
+        self.headbar.set_glass_source(self.view.viewport())
         self.sticky = StickyDay(self)
         self.sticky.set_glass_source(self.view.viewport())
         self.selbar = widgets.SelectionBar(self)
@@ -552,7 +563,8 @@ class GridPage(QWidget):
         if periods:
             rows = self.db.period_summary(self.level, self._level_year)
             covers = self.db.photos_by_ids([r["cover_id"] for r in rows])
-            self.model.set_periods(rows, self.level, covers)
+            self.model.set_periods(rows, self.level, covers,
+                                   top_gap=self.head_height())
             n = sum(r["c"] for r in rows)
             total = sum(r["b"] or 0 for r in rows)
             what = "year" if self.level == "year" else "month"
@@ -567,7 +579,8 @@ class GridPage(QWidget):
             return
         self.filter.sort_desc = self.sort_box.currentIndex() == 0
         self._rows = self.db.query_photos(self.filter)
-        self.model.set_photos(self._rows, group_by_day=True)
+        self.model.set_photos(self._rows, group_by_day=True,
+                              top_gap=self.head_height())
         n = len(self._rows)
         total = sum((r["filesize"] or 0) for r in self._rows)
         self.lab_sub.setText(f"{fmt.count_label(n)} {fmt.plural(n, 'photo')} · "
@@ -641,9 +654,10 @@ class GridPage(QWidget):
         self._sync_sticky()
 
     def _top_index(self):
-        """First item under the top of the viewport, skipping the layout gaps."""
+        """First item under the floating header, skipping the layout gaps."""
         w = self.view.viewport().width()
-        for y in range(2, 60, 4):
+        start = self.head_height() + 2
+        for y in range(start, start + 60, 4):
             for x in (8, w // 2, max(8, w - 14)):
                 ix = self.view.indexAt(QPoint(x, y))
                 if ix.isValid():
@@ -679,7 +693,8 @@ class GridPage(QWidget):
         # the glass under it can only be sampled from the viewport anyway
         vp = self.view.viewport()
         pos = vp.mapTo(self, QPoint(0, 0))
-        self.sticky.setGeometry(pos.x(), pos.y(), vp.width(), StickyDay.HEIGHT)
+        self.sticky.setGeometry(pos.x(), pos.y() + self.head_height(),
+                                vp.width(), StickyDay.HEIGHT)
 
     def _zoom_by(self, steps):
         """Ctrl+wheel: resize the thumbnails and stay where you were."""
@@ -767,7 +782,16 @@ class GridPage(QWidget):
         self._position_overlays()
         QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
 
+    def head_height(self):
+        return self.headwrap.sizeHint().height() if hasattr(self, "headwrap") else 0
+
     def _position_overlays(self, animate_selbar=False):
+        if hasattr(self, "headwrap"):
+            # stop where the timeline rail starts, or the bar sits on its labels
+            gap = (self.rail.width() + 6) if self.rail.isVisible() else 0
+            self.headwrap.setGeometry(0, 0, max(120, self.width() - gap),
+                                      self.head_height())
+            self.headwrap.raise_()
         if self.sticky.isVisible():
             self._place_sticky()
         if self.empty.isVisible():

@@ -91,6 +91,30 @@ class Glass:
         return blurred is not None
 
 
+class GlassBar(QFrame):
+    """A frosted bar that content scrolls underneath."""
+
+    def __init__(self, parent=None, radius=0, tint=None, tint_alpha=175):
+        super().__init__(parent)
+        self._glass_source = None
+        self._radius = radius
+        self._tint = tint
+        self._alpha = tint_alpha
+
+    def set_glass_source(self, w):
+        self._glass_source = w
+        self.update()
+
+    def paintEvent(self, ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        if not Glass.paint(p, self, self._glass_source, radius=self._radius,
+                           tint=self._tint or style.PAL["bg"], tint_alpha=self._alpha):
+            p.fillRect(self.rect(), QColor(self._tint or style.PAL["bg"]))
+        p.end()
+
+
 class TitleBar(QFrame):
     """The window's own title bar, so the chrome matches the app.
 
