@@ -91,19 +91,16 @@ class MainWindow(QMainWindow):
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setAttribute(Qt.WA_Hover, True)
 
+        # The sidebar rises to the top margin so the window has the same border
+        # all the way round; the window buttons live in a slim strip above the
+        # content column, where they cost no vertical space of their own.
         root = QWidget()
         root.setObjectName("Root")
-        outer = QVBoxLayout(root)
-        outer.setContentsMargins(0, 0, 0, 0)
-        outer.setSpacing(0)
-        self.titlebar = widgets.TitleBar(self)
-        outer.addWidget(self.titlebar)
-        body = QWidget()
-        rl = QHBoxLayout(body)
-        rl.setContentsMargins(self.EDGE, 0, self.EDGE, self.EDGE)
+        rl = QHBoxLayout(root)
+        rl.setContentsMargins(self.EDGE, self.EDGE, self.EDGE, self.EDGE)
         rl.setSpacing(self.EDGE)
-        outer.addWidget(body, 1)
         self.setCentralWidget(root)
+        self.titlebar = widgets.TitleBar(self)
 
         # ---------------- sidebar ----------------
         side = QFrame()
@@ -162,8 +159,14 @@ class MainWindow(QMainWindow):
         rl.addWidget(side)
 
         # ---------------- pages ----------------
+        col = QWidget()
+        cv = QVBoxLayout(col)
+        cv.setContentsMargins(0, 0, 0, 0)
+        cv.setSpacing(0)
+        cv.addWidget(self.titlebar)
         self.stack = QStackedWidget()
-        rl.addWidget(self.stack, 1)
+        cv.addWidget(self.stack, 1)
+        rl.addWidget(col, 1)
 
         self.page_grid = GridPage(self, self.cache)
         self.page_memories = MemoriesPage(self, self.cache)
@@ -1225,10 +1228,10 @@ class MainWindow(QMainWindow):
         if ev.type() == ev.Type.WindowStateChange and hasattr(self, "titlebar"):
             self.titlebar.sync()
             # a maximised window has no border to grab, and its corners are square
-            body = self.centralWidget().layout().itemAt(1).widget()
             gap = 0 if self.isMaximized() else self.EDGE
-            body.layout().setContentsMargins(gap, 0, gap, gap)
-            body.layout().setSpacing(self.EDGE)
+            lay = self.centralWidget().layout()
+            lay.setContentsMargins(gap, gap, gap, gap)
+            lay.setSpacing(self.EDGE)
             winutil.round_corners(self.winId(), not self.isMaximized())
 
     def resizeEvent(self, ev):

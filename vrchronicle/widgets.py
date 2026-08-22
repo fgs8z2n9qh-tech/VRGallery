@@ -100,7 +100,7 @@ class TitleBar(QFrame):
     window.
     """
 
-    HEIGHT = 36
+    HEIGHT = 28          # slim: it holds three buttons, not a title
 
     def __init__(self, window):
         super().__init__(window)
@@ -108,7 +108,7 @@ class TitleBar(QFrame):
         self.setObjectName("TitleBar")
         self.setFixedHeight(self.HEIGHT)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 0, 6, 0)
+        lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(2)
         self.lab = QLabel("")
         self.lab.setObjectName("TitleBarText")
@@ -123,12 +123,12 @@ class TitleBar(QFrame):
     def _chrome(self, icon, tip, slot, danger=False):
         b = QPushButton()
         b.setObjectName("WinCloseBtn" if danger else "WinBtn")
-        b.setFixedSize(44, 30)
+        b.setFixedSize(40, 26)
         b.setToolTip(tip)
         b.setFocusPolicy(Qt.NoFocus)
         b.setCursor(Qt.ArrowCursor)
-        b.setIcon(icons.qicon(icon, style.PAL["dim"], 15))
-        b.setIconSize(QSize(15, 15))
+        b.setIcon(icons.qicon(icon, style.PAL["dim"], 14))
+        b.setIconSize(QSize(14, 14))
         b.clicked.connect(slot)
         return b
 
@@ -145,7 +145,7 @@ class TitleBar(QFrame):
     def sync(self):
         maxed = self.win.isMaximized()
         self.btn_max.setIcon(icons.qicon("win-restore" if maxed else "win-max",
-                                         style.PAL["dim"], 15))
+                                         style.PAL["dim"], 14))
         self.btn_max.setToolTip("Restore" if maxed else "Maximise")
 
     def mouseDoubleClickEvent(self, ev):
