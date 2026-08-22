@@ -246,6 +246,52 @@ def test_a_drag_that_overshoots_the_photo_is_cropped_to_it(view):
     assert fh == pytest.approx(0.50, abs=0.02)
 
 
+def _drag(view, start, end):
+    """Press at start, release at end, and return the box that was stored."""
+    from PySide6.QtCore import QEvent, QPointF, Qt
+    from PySide6.QtGui import QMouseEvent
+    got = []
+    view.tag_placed.connect(lambda *a: got.append(a))
+    view.set_tagging(True)
+    a, b = QPointF(*start), QPointF(*end)
+    view.mousePressEvent(QMouseEvent(QEvent.MouseButtonPress, a, a,
+                                     Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    view.mouseReleaseEvent(QMouseEvent(QEvent.MouseButtonRelease, b, b,
+                                       Qt.LeftButton, Qt.LeftButton, Qt.NoModifier))
+    view.set_tagging(False)
+    view.tag_placed.disconnect()
+    return got[-1] if got else None
+
+
+def test_a_small_head_keeps_the_box_you_drew(view):
+    """A distant face is a small box. It used to snap to the default size,
+    which made tagging everybody in a crowded shot impossible."""
+    view.set_tags([])
+    rect = view._image_rect()
+    x, y = rect.x() + rect.width() * 0.4, rect.y() + rect.height() * 0.4
+    for px in (12, 20, 28):                     # all below the old threshold
+        _fx, _fy, fw, fh = _drag(view, (x, y), (x + px, y + px))
+        drawn_w = fw * rect.width()
+        assert drawn_w == pytest.approx(px, abs=1.5),             f"a {px}px drag was stored as {drawn_w:.0f}px"
+        assert fw < view.DEFAULT_BOX, "it snapped to the default size"
+
+
+def test_a_real_click_still_gets_a_head_sized_box(view):
+    view.set_tags([])
+    rect = view._image_rect()
+    x, y = rect.x() + rect.width() * 0.4, rect.y() + rect.height() * 0.4
+    _fx, _fy, fw, _fh = _drag(view, (x, y), (x + 2, y + 1))    # a click, not a drag
+    assert fw == pytest.approx(view.DEFAULT_BOX, abs=1e-6)
+
+
+def test_a_thin_drag_is_never_stored_as_a_sliver(view):
+    view.set_tags([])
+    rect = view._image_rect()
+    x, y = rect.x() + rect.width() * 0.4, rect.y() + rect.height() * 0.4
+    _fx, _fy, fw, fh = _drag(view, (x, y), (x + 60, y + 1))
+    assert fh * rect.height() >= view.MIN_DRAWN - 0.5
+
+
 def test_a_panorama_cannot_get_a_box_taller_than_itself(view):
     from PySide6.QtGui import QPixmap
     wide = QPixmap(4096, 400)

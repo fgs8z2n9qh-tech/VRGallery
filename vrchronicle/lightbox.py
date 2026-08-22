@@ -39,7 +39,8 @@ class ImageView(QWidget):
     tag_clicked = Signal(str)
 
     DEFAULT_BOX = 0.11        # fraction of image width when you just click
-    MIN_BOX = 0.02            # anything smaller was a click, not a drag
+    DRAG_SLOP = 5             # widget px: below this the gesture was a click
+    MIN_DRAWN = 10            # widget px: a stored box is never thinner
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -368,14 +369,31 @@ class ImageView(QWidget):
             r = self._image_rect()
             if r is None:
                 return
-            # a drag that overshoots into the letterbox must not become a box
-            # covering the whole photo
-            box = QRectF(start, end).normalized().intersected(r)
-            fx = (box.x() - r.x()) / max(1.0, r.width())
-            fy = (box.y() - r.y()) / max(1.0, r.height())
-            fw = box.width() / max(1.0, r.width())
-            fh = box.height() / max(1.0, r.height())
-            if fw < self.MIN_BOX or fh < self.MIN_BOX:
+            raw = QRectF(start, end).normalized()
+            # Click or drag is a question about the GESTURE, so it is measured
+            # in widget pixels. Measuring it as a fraction of the image made
+            # every small head snap to the default size -- and zooming in made
+            # that worse, because the fraction only got smaller.
+            drew = max(raw.width(), raw.height()) >= self.DRAG_SLOP
+            if drew:
+                # keep the box that was drawn, however small it is on the
+                # photo, but never store a sliver
+                if raw.width() < self.MIN_DRAWN:
+                    g = (self.MIN_DRAWN - raw.width()) / 2
+                    raw.adjust(-g, 0, g, 0)
+                if raw.height() < self.MIN_DRAWN:
+                    g = (self.MIN_DRAWN - raw.height()) / 2
+                    raw.adjust(0, -g, 0, g)
+                # a drag that overshoots into the letterbox must not become a
+                # box covering the whole photo
+                box = raw.intersected(r)
+                drew = box.width() > 0 and box.height() > 0
+            if drew:
+                fx = (box.x() - r.x()) / max(1.0, r.width())
+                fy = (box.y() - r.y()) / max(1.0, r.height())
+                fw = box.width() / max(1.0, r.width())
+                fh = box.height() / max(1.0, r.height())
+            else:
                 # a plain click means "a head goes here", not a zero-size box.
                 # anchor on the press, which is always on the image
                 dw, dh = self.default_box()
