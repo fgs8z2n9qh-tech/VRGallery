@@ -68,6 +68,58 @@ def test_cleanup_modes_all_render(window):
         window.page_cleanup.refresh()
 
 
+def test_the_new_album_card_is_clickable_when_there_are_no_albums(window):
+    """The empty-state overlay used to cover the one card there was to click."""
+    window.activate("albums")
+    page = window.page_albums
+    assert page.main.db.albums() == []          # the state a new library is in
+    # isVisible() is False for everything while the window itself is hidden,
+    # so ask whether the widget was explicitly hidden instead
+    assert page.empty.isHidden(), "the empty state covered the New album card"
+
+    ix = page.model.index(0, 0)
+    assert ix.isValid()
+    from vrchronicle.pages import CardRole
+    assert ix.data(CardRole)["kind"] == "new"
+
+    # A real click, hit-tested through whatever is layered over the view --
+    # calling _clicked directly would pass even with the overlay in the way.
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    opened = []
+    page.card_activated = opened.append
+    QTest.mouseClick(page.view.viewport(), Qt.LeftButton,
+                     pos=page.view.visualRect(ix).center())
+    window.hide()
+    assert opened and opened[0]["kind"] == "new", "the click never reached the card"
+
+
+def test_a_page_with_nothing_at_all_still_shows_its_empty_state(window):
+    window.activate("worlds")
+    page = window.page_worlds
+    page.refresh()
+    assert page.model.rowCount() == 0
+    assert not page.empty.isHidden()
+
+
+def test_the_year_picker_actually_changes_the_statistics(window):
+    """It used to be wired to nothing at all."""
+    window.activate("stats")
+    page = window.page_stats
+    assert page.cb_year.itemData(0) == ""            # "All time" comes first
+    assert page.cb_year.count() > 1, "the library's year is missing"
+
+    before = page.lab_sub.text()
+    page.cb_year.setCurrentIndex(1)                  # pick the only real year
+    assert page.selected_year() == page.cb_year.currentText()
+    assert page.lab_sub.text() != before, "picking a year changed nothing"
+    assert page.lab_sub.text().startswith(page.selected_year())
+    # and the poster button names the year it would build
+    assert page.btn_year.text() == f"{page.poster_year()} in review"
+
+
 def test_filters_apply_without_error(window):
     page = window.page_grid
     window.activate("all")

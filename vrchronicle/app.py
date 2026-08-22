@@ -121,6 +121,10 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key == "stats-year":               # statistics narrowed to a year
+                win.activate("stats")
+                if win.page_stats.cb_year.count() > 1:
+                    win.page_stats.cb_year.setCurrentIndex(1)
             elif key.startswith("person:"):         # e.g. person:The_Woozoo
                 win.show_person(key.split(":", 1)[1])
             elif key.startswith("cleanup:"):        # e.g. cleanup:dupes

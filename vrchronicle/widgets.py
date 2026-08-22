@@ -136,6 +136,9 @@ class EmptyState(QWidget):
     def __init__(self, icon_name, title, sub="", parent=None):
         super().__init__(parent)
         self.setMinimumHeight(220)
+        # It is laid over a view, so it must never swallow a click meant for
+        # whatever is underneath it.
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         lay = QVBoxLayout(self)
         lay.setAlignment(Qt.AlignCenter)
         lay.setSpacing(10)

@@ -486,19 +486,23 @@ class Database:
                                    [(stars, p) for p in pids])
             self._conn.commit()
 
-    def region_summary(self):
+    def region_summary(self, year=""):
+        yr = " AND substr(day,1,4)=?" if year else ""
+        y = [str(year)] if year else []
         with self._lock:
             return self._conn.execute(
-                "SELECT region, COUNT(*) c FROM photos "
-                "WHERE missing=0 AND region IS NOT NULL AND region != '' "
-                "GROUP BY region ORDER BY c DESC").fetchall()
+                f"SELECT region, COUNT(*) c FROM photos "
+                f"WHERE missing=0 AND region IS NOT NULL AND region != ''{yr} "
+                f"GROUP BY region ORDER BY c DESC", y).fetchall()
 
-    def instance_summary(self):
+    def instance_summary(self, year=""):
+        yr = " AND substr(day,1,4)=?" if year else ""
+        y = [str(year)] if year else []
         with self._lock:
             return self._conn.execute(
-                "SELECT instance_type, COUNT(*) c FROM photos "
-                "WHERE missing=0 AND instance_type IS NOT NULL AND instance_type != '' "
-                "GROUP BY instance_type ORDER BY c DESC").fetchall()
+                f"SELECT instance_type, COUNT(*) c FROM photos "
+                f"WHERE missing=0 AND instance_type IS NOT NULL AND instance_type != ''{yr} "
+                f"GROUP BY instance_type ORDER BY c DESC", y).fetchall()
 
     def set_favorite(self, pids, on):
         with self._lock:
@@ -741,49 +745,56 @@ class Database:
                    GROUP BY day HAVING c>=? ORDER BY RANDOM() LIMIT 1""",
                 (min_photos,)).fetchone()
 
-    def stats(self, self_names):
+    def stats(self, self_names, year=""):
+        """Whole-library figures, or one year of them when `year` is given."""
         ex = ""
         params = []
         if self_names:
             ex = " AND pp.name NOT IN (%s)" % ",".join("?" * len(self_names))
             params = list(self_names)
+        # `p.` for the queries that join, bare for the ones that do not
+        yr = " AND substr(day,1,4)=?" if year else ""
+        yrp = " AND substr(p.day,1,4)=?" if year else ""
+        y = [str(year)] if year else []
         with self._lock:
             tot = self._conn.execute(
-                "SELECT COUNT(*) c, COALESCE(SUM(filesize),0) s FROM photos WHERE missing=0"
-            ).fetchone()
+                f"SELECT COUNT(*) c, COALESCE(SUM(filesize),0) s FROM photos "
+                f"WHERE missing=0{yr}", y).fetchone()
             worlds = self._conn.execute(
-                "SELECT COUNT(DISTINCT world_id) c FROM photos WHERE missing=0 AND world_id IS NOT NULL"
-            ).fetchone()
+                f"SELECT COUNT(DISTINCT world_id) c FROM photos "
+                f"WHERE missing=0 AND world_id IS NOT NULL{yr}", y).fetchone()
             people = self._conn.execute(
                 f"SELECT COUNT(DISTINCT pp.name) c FROM photo_players pp "
-                f"JOIN photos p ON p.id=pp.photo_id WHERE p.missing=0{ex}", params).fetchone()
+                f"JOIN photos p ON p.id=pp.photo_id WHERE p.missing=0{yrp}{ex}",
+                y + params).fetchone()
             busiest = self._conn.execute(
-                "SELECT day, COUNT(*) c FROM photos WHERE missing=0 AND day IS NOT NULL "
-                "GROUP BY day ORDER BY c DESC, day DESC LIMIT 1").fetchone()
+                f"SELECT day, COUNT(*) c FROM photos WHERE missing=0 AND day IS NOT NULL{yr} "
+                f"GROUP BY day ORDER BY c DESC, day DESC LIMIT 1", y).fetchone()
             months = self._conn.execute(
-                "SELECT substr(day,1,7) m, COUNT(*) c FROM photos "
-                "WHERE missing=0 AND day IS NOT NULL GROUP BY m ORDER BY m").fetchall()
+                f"SELECT substr(day,1,7) m, COUNT(*) c FROM photos "
+                f"WHERE missing=0 AND day IS NOT NULL{yr} GROUP BY m ORDER BY m", y).fetchall()
             top_worlds = self._conn.execute(
-                """SELECT COALESCE(
+                f"""SELECT COALESCE(
                         (SELECT p2.world_name FROM photos p2 WHERE p2.world_id=p.world_id
                           AND p2.world_name IS NOT NULL ORDER BY p2.taken_at DESC LIMIT 1),
                         p.world_id) name, COUNT(*) c
-                   FROM photos p WHERE p.missing=0 AND p.world_id IS NOT NULL
-                   GROUP BY p.world_id ORDER BY c DESC LIMIT 10""").fetchall()
+                   FROM photos p WHERE p.missing=0 AND p.world_id IS NOT NULL{yrp}
+                   GROUP BY p.world_id ORDER BY c DESC LIMIT 10""", y).fetchall()
             top_people = self._conn.execute(
                 f"""SELECT pp.name, COUNT(DISTINCT pp.photo_id) c FROM photo_players pp
-                    JOIN photos p ON p.id=pp.photo_id WHERE p.missing=0{ex}
-                    GROUP BY pp.name ORDER BY c DESC LIMIT 10""", params).fetchall()
+                    JOIN photos p ON p.id=pp.photo_id WHERE p.missing=0{yrp}{ex}
+                    GROUP BY pp.name ORDER BY c DESC LIMIT 10""", y + params).fetchall()
             hours = self._conn.execute(
-                "SELECT substr(taken_at,12,2) h, COUNT(*) c FROM photos "
-                "WHERE missing=0 AND taken_at IS NOT NULL GROUP BY h ORDER BY h").fetchall()
+                f"SELECT substr(taken_at,12,2) h, COUNT(*) c FROM photos "
+                f"WHERE missing=0 AND taken_at IS NOT NULL{yr} "
+                f"GROUP BY h ORDER BY h", y).fetchall()
             top_avatars = self._conn.execute(
-                "SELECT avatar_name name, COUNT(*) c FROM photos "
-                "WHERE missing=0 AND avatar_name IS NOT NULL AND avatar_name != '' "
-                "GROUP BY avatar_name ORDER BY c DESC LIMIT 10").fetchall()
+                f"SELECT avatar_name name, COUNT(*) c FROM photos "
+                f"WHERE missing=0 AND avatar_name IS NOT NULL AND avatar_name != ''{yr} "
+                f"GROUP BY avatar_name ORDER BY c DESC LIMIT 10", y).fetchall()
             sessions = self._conn.execute(
-                "SELECT COUNT(DISTINCT session_id) c FROM photos "
-                "WHERE missing=0 AND session_id IS NOT NULL").fetchone()
+                f"SELECT COUNT(DISTINCT session_id) c FROM photos "
+                f"WHERE missing=0 AND session_id IS NOT NULL{yr}", y).fetchone()
         return {"total": tot["c"], "bytes": tot["s"], "worlds": worlds["c"],
                 "people": people["c"], "busiest": busiest,
                 "months": months, "top_worlds": top_worlds,

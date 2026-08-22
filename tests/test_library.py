@@ -195,6 +195,19 @@ def test_someone_tagged_by_hand_is_findable(tmp_path):
     db.close()
 
 
+def test_statistics_can_be_narrowed_to_one_year(tmp_path):
+    db = Database(str(tmp_path / "y.db"))
+    db.upsert_photos([_photo("a.png", "2025-06-01"), _photo("b.png", "2026-01-02"),
+                      _photo("c.png", "2026-03-04")])
+    assert db.years() == [2026, 2025]
+    assert db.stats([])["total"] == 3            # no year: the whole library
+    assert db.stats([], "2026")["total"] == 2
+    assert db.stats([], "2025")["total"] == 1
+    assert [m["m"] for m in db.stats([], "2026")["months"]] == ["2026-01", "2026-03"]
+    assert db.stats([], "1999")["total"] == 0
+    db.close()
+
+
 def test_the_contact_sheet_query_returns_what_its_caller_reads(tmp_path):
     """act_contact_sheet reads is_video, and push_moment reads rating."""
     db = Database(str(tmp_path / "c.db"))

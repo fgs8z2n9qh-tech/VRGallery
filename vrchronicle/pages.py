@@ -210,7 +210,9 @@ class CardsPage(QWidget):
         self.model.set_cards(cards)
         n = sum(1 for c in cards if c["kind"] != "new")
         self.lab_sub.setText(f"{fmt.count_label(n)} {fmt.plural(n, 'item')}")
-        self.empty.setVisible(n == 0)
+        # A page holding an action card ("New album") is not empty: covering it
+        # with the empty state would hide the one thing there is to click.
+        self.empty.setVisible(not cards)
         self.empty.resize(self.view.size())
 
     def _clicked(self, ix):
@@ -685,7 +687,6 @@ class MomentsPage(QWidget):
 class AlbumsPage(CardsPage):
     def __init__(self, main, cache, parent=None):
         super().__init__(main, cache, "Albums", "layers", searchable=False, parent=parent)
-        self.empty.hide()
 
     def build_cards(self):
         cards = [{"kind": "new", "title": "New album", "sub": "", "cover": None,
@@ -888,7 +889,8 @@ class StatsPage(QWidget):
         head.addLayout(hb)
         head.addStretch(1)
         self.cb_year = QComboBox()
-        self.cb_year.setToolTip("Year to summarise")
+        self.cb_year.setToolTip("Narrow every chart on this page to one year")
+        self.cb_year.currentIndexChanged.connect(self._year_changed)
         head.addWidget(self.cb_year)
         self.btn_year = widgets.ghost_btn("Year in review", "award", primary=True)
         self.btn_year.clicked.connect(self._year_review)
@@ -954,8 +956,17 @@ class StatsPage(QWidget):
         scroll.setWidget(holder)
         root.addWidget(scroll, 1)
 
+    def _year_changed(self, _ix):
+        self.refresh()
+
+    def selected_year(self):
+        """'' for the whole library, else the four-digit year as a string."""
+        return self.cb_year.currentData() or ""
+
     def refresh(self):
-        s = self.main.db.stats(sorted(self.main.cfg.self_names))
+        self._fill_years()
+        year = self.selected_year()
+        s = self.main.db.stats(sorted(self.main.cfg.self_names), year)
         self.c_total.set(fmt.count_label(s["total"]), "photos total")
         self.c_size.set(fmt.human_size(s["bytes"]), "disk space")
         self.c_worlds.set(fmt.count_label(s["worlds"]), "known worlds")
@@ -974,22 +985,38 @@ class StatsPage(QWidget):
         from . import vrclog
         self.chart_instances.set_data([
             (vrclog.INSTANCE_LABELS.get(r["instance_type"], r["instance_type"]), r["c"])
-            for r in self.main.db.instance_summary()])
+            for r in self.main.db.instance_summary(year)])
         self.chart_regions.set_data([(REGION_NAMES.get(r["region"], r["region"].upper()),
-                                      r["c"]) for r in self.main.db.region_summary()])
+                                      r["c"]) for r in self.main.db.region_summary(year)])
         self._set_forecast()
-        self.lab_sub.setText(f'Across your whole library · '
-                             f'{fmt.count_label(s["sessions"])} sessions')
+        where = year if year else "Across your whole library"
+        self.lab_sub.setText(f'{where} · {fmt.count_label(s["sessions"])} sessions')
+
+    def _fill_years(self):
+        """Rebuild the year list, keeping whatever the user had chosen."""
         years = self.main.db.years()
-        cur = self.cb_year.currentText()
+        want = self.cb_year.currentData()
         self.cb_year.blockSignals(True)
         self.cb_year.clear()
-        self.cb_year.addItems([str(y) for y in years])
-        if cur and cur in [str(y) for y in years]:
-            self.cb_year.setCurrentText(cur)
+        self.cb_year.addItem("All time", "")
+        for y in years:
+            self.cb_year.addItem(str(y), str(y))
+        ix = self.cb_year.findData(want)
+        self.cb_year.setCurrentIndex(ix if ix >= 0 else 0)
         self.cb_year.blockSignals(False)
         self.cb_year.setEnabled(bool(years))
+        # the poster is always about one year, so say which one it will be
+        poster = self.poster_year()
+        self.btn_year.setText(f"{poster} in review" if poster else "Year in review")
         self.btn_year.setEnabled(bool(years))
+
+    def poster_year(self):
+        """The year the poster button will build: the chosen one, else the latest."""
+        year = self.selected_year()
+        if year:
+            return year
+        years = self.main.db.years()
+        return str(years[0]) if years else ""
 
     def _set_forecast(self):
         f = self.main.db.storage_forecast()
@@ -1015,10 +1042,11 @@ class StatsPage(QWidget):
         self.lab_forecast.setText(" ".join(bits) or "Not enough history yet.")
 
     def _year_review(self):
-        if not self.cb_year.currentText().isdigit():
-            return
-        year = int(self.cb_year.currentText())
-        self.main.build_year_review(year)
+        # "All time" has no poster of its own, so it builds the latest year --
+        # which is what the button says it will do
+        year = self.poster_year()
+        if year.isdigit():
+            self.main.build_year_review(int(year))
 
 
 # ---------------------------------------------------------------- cleanup
