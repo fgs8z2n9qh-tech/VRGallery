@@ -1,10 +1,11 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import QDate, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QHBoxLayout, QLabel,
-                               QLineEdit, QSlider, QVBoxLayout, QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QFrame,
+                               QHBoxLayout, QLabel, QLineEdit, QSlider, QVBoxLayout,
+                               QWidget)
 
-from . import fmt, icons, style, widgets
+from . import fmt, icons, style, vrclog, widgets
 from .db import PhotoFilter
 from .gridmodel import GridModel, GridView, PhotoDelegate, KIND_PHOTO, ItemRole, KindRole
 
@@ -162,10 +163,15 @@ class GridPage(QWidget):
         self.slider.valueChanged.connect(self._on_slider)
         head.addWidget(self.slider)
 
+        self.btn_filter = widgets.icon_btn("settings", "More filters", style.PAL["dim"],
+                                           checkable=True)
+        self.btn_filter.toggled.connect(self._toggle_filters)
+        head.addWidget(self.btn_filter)
         self.btn_play = widgets.icon_btn("play", "Slideshow", style.PAL["dim"])
         self.btn_play.clicked.connect(self._start_slideshow)
         head.addWidget(self.btn_play)
         root.addLayout(head)
+        root.addWidget(self._build_filter_bar())
 
         # --- grid ---
         self.model = GridModel(self)
@@ -203,6 +209,84 @@ class GridPage(QWidget):
         self.selbar.btn_album.clicked.connect(self._album_selection)
         self.selbar.btn_trash.clicked.connect(self._delete_selection)
         self.selbar.btn_close.clicked.connect(lambda: self.view.clearSelection())
+
+    def _build_filter_bar(self):
+        """A second row that stays out of the way until it is asked for."""
+        bar = QFrame()
+        bar.setObjectName("Card")
+        lay = QHBoxLayout(bar)
+        lay.setContentsMargins(14, 8, 14, 8)
+        lay.setSpacing(10)
+
+        lay.addWidget(QLabel("From"))
+        self.ed_from = QDateEdit()
+        self.ed_from.setCalendarPopup(True)
+        self.ed_from.setDisplayFormat("yyyy-MM-dd")
+        self.ed_from.setSpecialValueText("—")
+        self.ed_from.setMinimumDate(QDate(2017, 1, 1))
+        self.ed_from.setDate(self.ed_from.minimumDate())
+        lay.addWidget(self.ed_from)
+        lay.addWidget(QLabel("to"))
+        self.ed_to = QDateEdit()
+        self.ed_to.setCalendarPopup(True)
+        self.ed_to.setDisplayFormat("yyyy-MM-dd")
+        self.ed_to.setDate(QDate.currentDate())
+        lay.addWidget(self.ed_to)
+
+        lay.addSpacing(8)
+        lay.addWidget(QLabel("Instance"))
+        self.cb_instance = QComboBox()
+        self.cb_instance.addItem("Any", "")
+        for key, label in vrclog.INSTANCE_LABELS.items():
+            if key:
+                self.cb_instance.addItem(label, key)
+        lay.addWidget(self.cb_instance)
+
+        lay.addWidget(QLabel("Rating ≥"))
+        self.cb_rating = QComboBox()
+        for n in range(6):
+            self.cb_rating.addItem("Any" if n == 0 else "★" * n, n)
+        lay.addWidget(self.cb_rating)
+
+        lay.addWidget(QLabel("Media"))
+        self.cb_media = QComboBox()
+        for label, key in (("All", ""), ("Photos", "photo"), ("Videos", "video")):
+            self.cb_media.addItem(label, key)
+        lay.addWidget(self.cb_media)
+
+        lay.addStretch(1)
+        btn_apply = widgets.ghost_btn("Apply", "check", primary=True)
+        btn_apply.clicked.connect(self._apply_filters)
+        btn_clear = widgets.ghost_btn("Clear")
+        btn_clear.clicked.connect(self._clear_filters)
+        lay.addWidget(btn_clear)
+        lay.addWidget(btn_apply)
+        bar.setVisible(False)
+        self.filter_bar = bar
+        return bar
+
+    def _toggle_filters(self, on):
+        self.filter_bar.setVisible(on)
+
+    def _apply_filters(self):
+        f = self.filter
+        f.date_from = ("" if self.ed_from.date() == self.ed_from.minimumDate()
+                       else self.ed_from.date().toString("yyyy-MM-dd"))
+        f.date_to = self.ed_to.date().toString("yyyy-MM-dd")
+        if f.date_to >= QDate.currentDate().toString("yyyy-MM-dd"):
+            f.date_to = ""                    # "up to today" is no constraint
+        f.instance_type = self.cb_instance.currentData() or ""
+        f.min_rating = int(self.cb_rating.currentData() or 0)
+        f.media = self.cb_media.currentData() or ""
+        self.refresh()
+
+    def _clear_filters(self):
+        self.ed_from.setDate(self.ed_from.minimumDate())
+        self.ed_to.setDate(QDate.currentDate())
+        self.cb_instance.setCurrentIndex(0)
+        self.cb_rating.setCurrentIndex(0)
+        self.cb_media.setCurrentIndex(0)
+        self._apply_filters()
 
     # ------- state -------
     def configure(self, f: PhotoFilter, title, back=False):

@@ -18,6 +18,10 @@ from .gridmodel import MiniItem
 
 CardRole = Qt.UserRole + 1
 
+# VRChat's server region codes, spelled out
+REGION_NAMES = {"eu": "Europe", "us": "US East", "use": "US East", "usw": "US West",
+                "usx": "US", "jp": "Japan"}
+
 
 def page_header(title, sub=""):
     box = QVBoxLayout()
@@ -929,6 +933,17 @@ class StatsPage(QWidget):
         self.chart_avatars = charts.HBarChart(self.main.cfg)
         card_av.vbox.addWidget(self.chart_avatars)
         v.addWidget(card_av)
+        row2 = QHBoxLayout()
+        row2.setSpacing(12)
+        card_inst = widgets.Card("INSTANCE TYPES")
+        self.chart_instances = charts.HBarChart(self.main.cfg)
+        card_inst.vbox.addWidget(self.chart_instances)
+        card_reg = widgets.Card("REGIONS")
+        self.chart_regions = charts.HBarChart(self.main.cfg)
+        card_reg.vbox.addWidget(self.chart_regions)
+        row2.addWidget(card_inst, 1)
+        row2.addWidget(card_reg, 1)
+        v.addLayout(row2)
         card_fc = widgets.Card("STORAGE")
         self.lab_forecast = QLabel("")
         self.lab_forecast.setWordWrap(True)
@@ -956,6 +971,12 @@ class StatsPage(QWidget):
         self.chart_people.set_data([(p["name"], p["c"]) for p in s["top_people"]])
         self.chart_hours.set_data(s["hours"])
         self.chart_avatars.set_data([(av["name"], av["c"]) for av in s["top_avatars"]])
+        from . import vrclog
+        self.chart_instances.set_data([
+            (vrclog.INSTANCE_LABELS.get(r["instance_type"], r["instance_type"]), r["c"])
+            for r in self.main.db.instance_summary()])
+        self.chart_regions.set_data([(REGION_NAMES.get(r["region"], r["region"].upper()),
+                                      r["c"]) for r in self.main.db.region_summary()])
         self._set_forecast()
         self.lab_sub.setText(f'Across your whole library · '
                              f'{fmt.count_label(s["sessions"])} sessions')
@@ -1811,11 +1832,20 @@ class SettingsPage(QWidget):
         btn_cache.clicked.connect(self._clear_cache)
         btn_open = widgets.ghost_btn("Open data folder", "external")
         btn_open.clicked.connect(lambda: winutil.open_file(self._appdir()))
+        btn_upd = widgets.ghost_btn("Check for updates", "refresh")
+        btn_upd.clicked.connect(
+            lambda: self.main.check_for_update(announce_when_current=True))
         drow.addWidget(btn_reindex)
         drow.addWidget(btn_cache)
         drow.addWidget(btn_open)
+        drow.addWidget(btn_upd)
         drow.addStretch(1)
         card_data.vbox.addLayout(drow)
+        self.chk_updates = QCheckBox("Check GitHub for a newer release at startup")
+        self.chk_updates.setChecked(bool(self.main.cfg.get("check_updates")))
+        self.chk_updates.toggled.connect(
+            lambda on: self.main.cfg.set("check_updates", bool(on)))
+        card_data.vbox.addWidget(self.chk_updates)
         self.lab_cache = QLabel("")
         self.lab_cache.setStyleSheet("color:%s; font-size:11px;" % style.PAL["faint"])
         card_data.vbox.addWidget(self.lab_cache)
@@ -1836,7 +1866,6 @@ class SettingsPage(QWidget):
         root.addWidget(scroll, 1)
 
     def _appdir(self):
-        from . import paths
         return paths.APPDIR
 
     def refresh(self):
@@ -1852,7 +1881,8 @@ class SettingsPage(QWidget):
             ic = QLabel()
             ic.setPixmap(icons.pixmap("folder", style.PAL["dim"], 16,
                                       self.devicePixelRatioF()))
-            lab = QLabel(f)
+            lab = QLabel(paths.pretty(f))
+            lab.setToolTip(f)
             lab.setStyleSheet("color:%s;" % style.PAL["text"])
             rm = widgets.icon_btn("x", "Remove from list", px=14)
             rm.clicked.connect(lambda _c=False, p=f: self._remove_folder(p))
@@ -1865,12 +1895,11 @@ class SettingsPage(QWidget):
             lab.setStyleSheet("color:%s;" % style.PAL["faint"])
             self.folders_box.addWidget(lab)
         # cache size
-        from . import paths
         try:
             total = sum(e.stat().st_size for e in os.scandir(paths.THUMB_DIR))
             n = len(os.listdir(paths.THUMB_DIR))
             self.lab_cache.setText(f"Cache: {n} thumbnails · {fmt.human_size(total)} · "
-                                   f"{paths.APPDIR}")
+                                   f"{paths.pretty(paths.APPDIR)}")
         except OSError:
             self.lab_cache.setText("")
         self._refresh_api_url()
@@ -2020,7 +2049,6 @@ class SettingsPage(QWidget):
             self.main.toast("Autostart removed.", "ok")
 
     def _clear_cache(self):
-        from . import paths
         n = 0
         try:
             for e in os.scandir(paths.THUMB_DIR):

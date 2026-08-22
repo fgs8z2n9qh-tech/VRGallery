@@ -20,7 +20,7 @@ KIND_PHOTO = 1
 class PhotoItem:
     __slots__ = ("id", "path", "taken_at", "day", "world_id", "world_name",
                  "favorite", "width", "height", "filesize", "mtime", "meta_source",
-                 "avatar_name", "session_id", "instance_type")
+                 "avatar_name", "session_id", "instance_type", "rating", "is_video")
 
     def __init__(self, row):
         keys = row.keys()
@@ -39,6 +39,8 @@ class PhotoItem:
         self.avatar_name = row["avatar_name"] if "avatar_name" in keys else None
         self.session_id = row["session_id"] if "session_id" in keys else None
         self.instance_type = row["instance_type"] if "instance_type" in keys else ""
+        self.rating = (row["rating"] or 0) if "rating" in keys else 0
+        self.is_video = bool(row["is_video"]) if "is_video" in keys else False
 
 
 class MiniItem:
@@ -219,6 +221,14 @@ class GridModel(QAbstractListModel):
                 ix = self.index(r)
                 self.dataChanged.emit(ix, ix, [Qt.DecorationRole])
 
+    def set_rating(self, pids, stars):
+        for pid in pids:
+            r = self._by_id.get(pid)
+            if r is not None:
+                self._rows[r][1].rating = stars
+                ix = self.index(r)
+                self.dataChanged.emit(ix, ix, [Qt.DecorationRole])
+
 
 class PhotoDelegate(QStyledItemDelegate):
     """Rounded cover-crop thumbnails; day headers span the full row."""
@@ -294,9 +304,19 @@ class PhotoDelegate(QStyledItemDelegate):
         hovered = bool(option.state & QStyle.State_MouseOver)
         selected = bool(option.state & QStyle.State_Selected)
 
-        pm = self.cache.get(item)
+        pm = None if item.is_video else self.cache.get(item)
         p.setClipPath(path)
-        if pm is None or pm.isNull():
+        if item.is_video:
+            # no frame is ever decoded from a recording; it gets its own tile
+            p.fillRect(r, QColor(style.PAL["surface2"]))
+            glyph = icons.pixmap("film", style.PAL["faint"], 30,
+                                 self.view.devicePixelRatioF(), width=1.6)
+            p.drawPixmap(int(rf.center().x() - 15), int(rf.center().y() - 21), glyph)
+            p.setFont(self._f_small)
+            p.setPen(QColor(style.PAL["faint"]))
+            p.drawText(QRectF(rf.x(), rf.center().y() + 12, rf.width(), 16),
+                       Qt.AlignHCenter | Qt.AlignTop, "video")
+        elif pm is None or pm.isNull():
             p.fillRect(r, QColor(style.PAL["surface2"]))
             glyph = icons.pixmap("aperture", style.PAL["border2"], 26,
                                  self.view.devicePixelRatioF(), width=1.6)
@@ -350,6 +370,12 @@ class PhotoDelegate(QStyledItemDelegate):
             p.setPen(QColor(255, 255, 255, 170))
             p.drawText(QRectF(rf.x() + 9, rf.bottom() - 24, rf.width() - 18, 18),
                        Qt.AlignRight | Qt.AlignVCenter, tm)
+        # rating: small pips, only when the photo actually has one
+        if item.rating:
+            p.setPen(Qt.NoPen)
+            for i in range(item.rating):
+                p.setBrush(QColor(255, 255, 255, 225))
+                p.drawEllipse(QRectF(rf.x() + 9 + i * 9, rf.bottom() - 14, 5, 5))
         # favorite star (always when set; on hover as outline hit target)
         if item.favorite or hovered:
             sr = self._star_rect(r)

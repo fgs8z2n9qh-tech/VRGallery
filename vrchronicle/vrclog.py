@@ -234,20 +234,21 @@ class SessionMatcher:
         self._avatar_times = [t[0] for t in av]
 
     def match(self, dt):
-        """-> (session_id, world_id, world_name, [(name, uid)], instance_type) or None."""
+        """-> (session_id, world_id, world_name, [(name, uid)], instance_type, region)
+        or None."""
         if not self._sessions:
             return None
         i = bisect_right(self._starts, dt) - 1
         if i < 0:
             return None
-        st, en, sid, wid, wname, players, itype, _region = self._sessions[i]
+        st, en, sid, wid, wname, players, itype, region = self._sessions[i]
         if dt > en + self.JOIN_MARGIN:
             return None
         seen = {}
         for name, uid, jd, ld in players:
             if jd - self.PLAYER_PAD <= dt and (ld is None or ld + self.PLAYER_PAD >= dt):
                 seen.setdefault(name, uid)
-        return sid, wid, wname, sorted(seen.items()), itype
+        return sid, wid, wname, sorted(seen.items()), itype, region
 
     def avatar_at(self, dt):
         """The local user's avatar name at that moment, or None."""

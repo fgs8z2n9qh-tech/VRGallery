@@ -14,6 +14,12 @@ because it reads the same logs VRChat throws away.
 > is a generated scene. Publishing who somebody actually plays with, or the photos
 > they are in, is exactly the thing this app warns you about.
 
+## First run
+
+It says what it is going to read, from where, before it reads any of it.
+
+<img src="docs/09-welcome.png" width="620" alt="The welcome screen">
+
 ## Where the knowledge comes from
 
 1. **VRCX metadata** — if VRCX runs with its screenshot helper, world + players are
@@ -47,10 +53,18 @@ you usually run into each other, and who else is normally in the room.
 
 ## The photo itself
 
-World, avatar worn, instance type, and everyone who was in the instance when the
-shutter went. Click a name to see every photo you share with them.
+World, avatar worn, instance type, rating, and everyone who was in the instance when
+the shutter went. Click a name to see every photo you share with them.
 
 ![Lightbox](docs/06-lightbox.png)
+
+### Tagging people in the frame
+
+Press **T**, click where somebody is, and pick a name — the people the logs say were
+in that instance are offered first, so it is usually one click. Hovering a marker
+names them, the way a photo tag works anywhere else.
+
+![People tagged in a photo](docs/10-tags.png)
 
 ## Statistics and Year in review
 
@@ -73,8 +87,12 @@ is ever deleted permanently.
 ## Everything else
 
 - Timeline with a month/year rail, search by world / person / file, favorites, albums
+- **Filters** — date range, instance type, minimum rating, photos or recordings
+- **Star ratings** (1–5, or the number keys in the lightbox) alongside favorites
+- **Recordings** — `.mp4` and friends sit on the timeline and open in your player
 - **Memories** — "on this day, N years ago" + a random-day button
 - **Instance privacy** — warns before a friends-only shot leaves the group
+- **Desktop wallpaper** — from the tray, or right-click any photo
 - **Verified backup** of the whole library to another drive, additive and never deleting
 - **Headset import** — pull VRChat photos off a Quest over ADB
 - **XMP sidecars** — world, people and avatar next to the photo for Bridge / Lightroom /
@@ -93,7 +111,13 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe run.py
 ```
 
-Build the app and the shareable installer with `build.ps1` and `make_installer.ps1`.
+Run the tests with `.venv\Scripts\python.exe -m pytest tests -q`. They cover the log
+parser, moment detection, the database migration, and every path that can move a file —
+plus a headless smoke test that builds every page.
+
+Build the app and the shareable installer with `build.ps1` and `make_installer.ps1`;
+pushing a `v*` tag does the same on GitHub Actions and attaches the installer to the
+release.
 
 Flags: `--tray` (start hidden), `--index` (headless index), `--no-index` (show the
 library exactly as it is), `--data-dir DIR` (use a different library),

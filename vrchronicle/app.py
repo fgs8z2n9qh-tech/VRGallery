@@ -102,10 +102,12 @@ def main(argv=None):
     if args.shot:
         def snap():
             key = args.page
-            if key == "lightbox":
+            if key in ("lightbox", "lightbox-tags"):
                 photos = win.page_grid.model.photos()
                 if photos:
                     win.open_lightbox(win.page_grid, photos, 0)
+                if key == "lightbox-tags":
+                    win.lightbox.viewer.set_show_all_tags(True)
             elif key.startswith("person:"):         # e.g. person:The_Woozoo
                 win.show_person(key.split(":", 1)[1])
             elif key.startswith("cleanup:"):        # e.g. cleanup:dupes

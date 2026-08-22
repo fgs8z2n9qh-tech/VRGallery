@@ -1,0 +1,59 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Tag to build and attach the installer to
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+
+      - name: Tests
+        # a release that cannot pass its own tests should not exist
+        run: python -m pytest tests -q
+
+      - name: Build the app
+        run: |
+          python -m PyInstaller --noconfirm --clean --windowed `
+            --name VRChronicle `
+            --icon assets/VRChronicle.ico `
+            --add-data "assets;assets" `
+            run.py
+
+      - name: Package the installer
+        run: |
+          New-Item -ItemType Directory -Force stage | Out-Null
+          Copy-Item dist/VRChronicle stage/VRChronicle -Recurse
+          Copy-Item "installer/Install VRChronicle.cmd" stage/
+          Copy-Item "installer/README.txt" stage/
+          Copy-Item "installer/Uninstall VRChronicle.cmd" stage/VRChronicle/
+          Compress-Archive -Path stage/* -DestinationPath VRChronicle-Setup.zip -CompressionLevel Optimal
+          (Get-FileHash VRChronicle-Setup.zip -Algorithm SHA256).Hash.ToLower() | Out-File sha256.txt -Encoding ascii
+
+      - name: Attach to the release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.tag || github.ref_name }}
+          files: |
+            VRChronicle-Setup.zip
+            sha256.txt
+          fail_on_unmatched_files: true

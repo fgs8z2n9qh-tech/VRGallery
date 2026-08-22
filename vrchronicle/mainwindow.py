@@ -20,9 +20,11 @@ from .lightbox import Lightbox
 from .pages import (AlbumsPage, AvatarsPage, CleanupPage, MemoriesPage, MomentsPage,
                     PeoplePage, PersonPage, SessionsPage, SettingsPage, StatsPage,
                     WorldsPage)
+from .onboarding import Welcome
 from .scanner import Bridge, IndexWorker, LiveWatcher, ThumbService
 from .slideshow import Slideshow
 from .tray import Tray
+from . import updates
 
 NAV = [
     ("all", "Photos", "image"),
@@ -173,6 +175,7 @@ class MainWindow(QMainWindow):
         self.bridge.headset_found.connect(self._on_headset_found)
         self.bridge.sheet_ready.connect(self._on_sheet_ready)
         self.bridge.backup_planned.connect(self._on_backup_planned)
+        self.bridge.update_available.connect(self._on_update_available)
 
         # --no-index keeps a throwaway copy of a library exactly as it is, which
         # is what documentation screenshots need
@@ -188,6 +191,7 @@ class MainWindow(QMainWindow):
         self.tray.open_page.connect(lambda k: (self.show_from_tray(), self.activate(k)))
         self.tray.reindex.connect(self.start_index)
         self.tray.slideshow.connect(self._slideshow_favorites)
+        self.tray.wallpaper.connect(lambda: self.act_wallpaper())
         self.tray.quit_app.connect(self.quit_app)
         self.tray.show()
 
@@ -200,8 +204,19 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
 
         self.activate("all")
-        if auto_index:
+
+        self.welcome = None
+        if not cfg.get("onboarded"):
+            self.welcome = Welcome(self)
+            self.welcome.finished.connect(self._finish_onboarding)
+            self.welcome.setGeometry(root.rect())
+            self.welcome.show()
+            self.welcome.raise_()
+        elif auto_index:
             QTimer.singleShot(150, self.start_index)
+
+        if auto_index and cfg.get("check_updates"):
+            QTimer.singleShot(4000, self.check_for_update)
 
     # ---------------- navigation ----------------
     def activate(self, key):
@@ -379,6 +394,71 @@ class MainWindow(QMainWindow):
                 page.refresh()
                 return
 
+    # ---------------- first run / updates ----------------
+    def _finish_onboarding(self):
+        if self.welcome is not None:
+            self.welcome.hide()
+            self.welcome.deleteLater()
+            self.welcome = None
+        self.watcher = LiveWatcher(self.cfg, self) if self.auto_index else None
+        if self.watcher is not None:
+            self.watcher.changed.connect(self._on_watch_changed)
+        self.start_index()
+
+    def check_for_update(self, announce_when_current=False):
+        bridge = self.bridge
+
+        def job():
+            tag, url = updates.check()
+            if tag:
+                bridge.update_available.emit(tag, url)
+            elif announce_when_current:
+                bridge.toast.emit(f"{paths.APP_NAME} {paths.APP_VERSION} is the "
+                                  "latest release.", "ok")
+
+        self._run_bg(job)
+
+    def _on_update_available(self, tag, url):
+        if QMessageBox.question(
+                self, "Update available",
+                f"{paths.APP_NAME} {tag} has been released — you are running "
+                f"{paths.APP_VERSION}.\n\nOpen the release page?",
+                QMessageBox.Yes | QMessageBox.No) == QMessageBox.Yes:
+            winutil.open_url(url)
+
+    def act_wallpaper(self, item=None):
+        """Put a photo on the desktop. A copy is used so the original is never
+        locked by the shell or rewritten by Windows."""
+        if item is None:
+            rows = self.db.query_photos(PhotoFilter(favorites=True, media="photo"))
+            if not rows:
+                rows = self.db.query_photos(PhotoFilter(min_rating=4, media="photo"))
+            if not rows:
+                self.toast("Mark a favorite first and it can go on your desktop.",
+                           "info")
+                return
+            import random
+            from .gridmodel import PhotoItem
+            item = PhotoItem(random.choice(rows))
+        if getattr(item, "is_video", False):
+            self.toast("That one is a recording, not a photo.", "err")
+            return
+        bridge = self.bridge
+        src = item.path
+
+        def job():
+            try:
+                out = os.path.join(paths.APPDIR, "wallpaper.jpg")
+                export.downscaled_copy(src, out, max_px=3840, quality=94)
+                ok = winutil.set_wallpaper(out)
+                bridge.toast.emit("Desktop wallpaper set." if ok else
+                                  "Windows refused the wallpaper change.",
+                                  "ok" if ok else "err")
+            except Exception as e:
+                bridge.toast.emit(f"Wallpaper failed: {e.__class__.__name__}", "err")
+
+        self._run_bg(job)
+
     # ---------------- tray ----------------
     def show_from_tray(self):
         was_hidden = not self.isVisible()
@@ -471,6 +551,24 @@ class MainWindow(QMainWindow):
             self.lightbox._refresh_fav_icon()
         if self.page_grid.filter.favorites and not on:
             self.page_grid.refresh()
+
+    def act_rate(self, pids, stars):
+        if not pids:
+            return
+        self.db.set_rating(pids, stars)
+        self.page_grid.model.set_rating(pids, stars)
+        it = self.lightbox.current()
+        if it and it.id in set(pids):
+            it.rating = stars
+            self.lightbox.refresh_rating()
+        self.toast(f"Rated {'★' * stars}" if stars else "Rating cleared.", "ok")
+        if self.page_grid.filter.min_rating and stars < self.page_grid.filter.min_rating:
+            self.page_grid.refresh()
+
+    def act_tag(self, photo_id, name, x, y):
+        self.db.set_photo_tag(photo_id, name, x, y,
+                              datetime.now().isoformat(timespec="seconds"))
+        self.toast(f"Tagged {name}.", "ok")
 
     def act_copy(self, item):
         img = QImage(item.path)
@@ -690,6 +788,11 @@ class MainWindow(QMainWindow):
         act_fav = m.addAction(icons.qicon("star", style.PAL["star"], 16),
                               "Remove favorite" if all_fav else "Add to favorites")
         act_fav.triggered.connect(lambda: self.act_favorite([i.id for i in items]))
+        rate = m.addMenu(icons.qicon("award", style.PAL["dim"], 16), "Rate")
+        for n in range(5, -1, -1):
+            a = rate.addAction("★" * n if n else "No rating")
+            a.triggered.connect(lambda _c=False, s=n: self.act_rate(
+                [i.id for i in items], s))
         sub = m.addMenu(icons.qicon("layers", style.PAL["dim"], 16), "Add to album")
         real = self._album_menu([i.id for i in items])
         for a in real.actions():
@@ -714,6 +817,9 @@ class MainWindow(QMainWindow):
             act_frame = m.addAction(icons.qicon("maximize", style.PAL["dim"], 16),
                                     "Send to world frame")
             act_frame.triggered.connect(lambda: self.act_frame(single))
+            act_wall = m.addAction(icons.qicon("image", style.PAL["dim"], 16),
+                                   "Set as desktop wallpaper")
+            act_wall.triggered.connect(lambda: self.act_wallpaper(single))
             act_rev = m.addAction(icons.qicon("folder", style.PAL["dim"], 16),
                                   "Show in Explorer")
             act_rev.triggered.connect(lambda: self.act_reveal(single))
@@ -1018,6 +1124,8 @@ class MainWindow(QMainWindow):
         super().resizeEvent(ev)
         if self.lightbox.isVisible():
             self.lightbox.setGeometry(self.centralWidget().rect())
+        if self.welcome is not None:
+            self.welcome.setGeometry(self.centralWidget().rect())
         self.toast_w._replace()
 
     def closeEvent(self, ev):

@@ -31,7 +31,10 @@ CREATE TABLE IF NOT EXISTS photos(
   missing INTEGER DEFAULT 0,
   avatar_name TEXT,
   session_id INTEGER,
-  instance_type TEXT
+  instance_type TEXT,
+  region TEXT,
+  rating INTEGER DEFAULT 0,
+  is_video INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_photos_taken ON photos(taken_at);
 CREATE INDEX IF NOT EXISTS idx_photos_day ON photos(day);
@@ -44,6 +47,19 @@ CREATE TABLE IF NOT EXISTS photo_players(
   PRIMARY KEY(photo_id, name)
 );
 CREATE INDEX IF NOT EXISTS idx_pp_name ON photo_players(name);
+
+-- where in the frame somebody is: x/y are fractions of the image, so they
+-- survive resizing, cropping-free re-encoding and any display size
+CREATE TABLE IF NOT EXISTS photo_tags(
+  id INTEGER PRIMARY KEY,
+  photo_id INTEGER NOT NULL,
+  name TEXT NOT NULL,
+  x REAL NOT NULL,
+  y REAL NOT NULL,
+  created_at TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_tags_photo ON photo_tags(photo_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_tags_uniq ON photo_tags(photo_id, name);
 
 CREATE TABLE IF NOT EXISTS albums(
   id INTEGER PRIMARY KEY,
@@ -106,11 +122,18 @@ class PhotoFilter:
     day: str = ""            # exact YYYY-MM-DD
     avatar: str = ""
     session_id: int = 0
+    date_from: str = ""      # inclusive YYYY-MM-DD
+    date_to: str = ""        # inclusive YYYY-MM-DD
+    instance_type: str = ""
+    min_rating: int = 0
+    media: str = ""          # '', 'photo' or 'video'
     sort_desc: bool = True
 
     def is_plain(self):
         return not (self.text or self.world_id or self.person or self.favorites
-                    or self.album_id or self.day or self.avatar or self.session_id)
+                    or self.album_id or self.day or self.avatar or self.session_id
+                    or self.date_from or self.date_to or self.instance_type
+                    or self.min_rating or self.media)
 
 
 class Database:
@@ -129,7 +152,9 @@ class Database:
         """Add columns introduced after a library was first created."""
         have = {r["name"] for r in self._conn.execute("PRAGMA table_info(photos)")}
         for col, decl in (("avatar_name", "TEXT"), ("session_id", "INTEGER"),
-                          ("instance_type", "TEXT")):
+                          ("instance_type", "TEXT"), ("region", "TEXT"),
+                          ("rating", "INTEGER DEFAULT 0"),
+                          ("is_video", "INTEGER DEFAULT 0")):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {decl}")
         have_s = {r["name"] for r in self._conn.execute("PRAGMA table_info(sessions)")}
@@ -162,13 +187,19 @@ class Database:
         """items: list of dicts(path, folder, filename, taken_at, day, filesize, mtime)."""
         if not items:
             return
+        # tolerate callers that predate a column rather than failing on a
+        # missing named binding
+        items = [{"is_video": 0, **it} for it in items]
         with self._lock:
             self._conn.executemany(
-                """INSERT INTO photos(path, folder, filename, taken_at, day, filesize, mtime)
-                   VALUES(:path, :folder, :filename, :taken_at, :day, :filesize, :mtime)
+                """INSERT INTO photos(path, folder, filename, taken_at, day, filesize,
+                                      mtime, is_video)
+                   VALUES(:path, :folder, :filename, :taken_at, :day, :filesize,
+                          :mtime, :is_video)
                    ON CONFLICT(path) DO UPDATE SET
                      filesize=excluded.filesize, mtime=excluded.mtime,
-                     taken_at=excluded.taken_at, day=excluded.day, missing=0""",
+                     taken_at=excluded.taken_at, day=excluded.day,
+                     is_video=excluded.is_video, missing=0""",
                 items)
             self._conn.commit()
 
@@ -227,14 +258,16 @@ class Database:
         with self._lock:
             if keep_avatars:
                 self._conn.executemany(
-                    "UPDATE photos SET session_id=?, instance_type=? WHERE id=?",
-                    [(m["session_id"], m["instance_type"], m["id"]) for m in matches])
+                    "UPDATE photos SET session_id=?, instance_type=?, region=? "
+                    "WHERE id=?",
+                    [(m["session_id"], m["instance_type"], m["region"], m["id"])
+                     for m in matches])
             else:
                 self._conn.executemany(
-                    "UPDATE photos SET session_id=?, avatar_name=?, instance_type=? "
-                    "WHERE id=?",
-                    [(m["session_id"], m["avatar"], m["instance_type"], m["id"])
-                     for m in matches])
+                    "UPDATE photos SET session_id=?, avatar_name=?, instance_type=?,"
+                    " region=? WHERE id=?",
+                    [(m["session_id"], m["avatar"], m["instance_type"], m["region"],
+                      m["id"]) for m in matches])
             log_side = [m for m in matches if m["source"] != "vrcx"]
             if log_side:
                 self._conn.executemany(
@@ -371,13 +404,35 @@ class Database:
         if f.session_id:
             where.append("p.session_id=?")
             params.append(f.session_id)
+        if f.date_from:
+            where.append("p.day >= ?")
+            params.append(f.date_from)
+        if f.date_to:
+            where.append("p.day <= ?")
+            params.append(f.date_to)
+        if f.instance_type:
+            where.append("p.instance_type=?")
+            params.append(f.instance_type)
+        if f.min_rating:
+            where.append("p.rating >= ?")
+            params.append(int(f.min_rating))
+        if f.media == "video":
+            where.append("p.is_video=1")
+        elif f.media == "photo":
+            where.append("p.is_video=0")
         if f.album_id:
             where.append("p.id IN (SELECT photo_id FROM album_photos WHERE album_id=?)")
             params.append(f.album_id)
         if f.text:
-            like = "%" + f.text + "%"
-            where.append("(p.world_name LIKE ? OR p.filename LIKE ? OR EXISTS("
-                         "SELECT 1 FROM photo_players pp WHERE pp.photo_id=p.id AND pp.name LIKE ?))")
+            # % and _ are LIKE wildcards: someone typing "50%" wants that text,
+            # not "everything containing 50"
+            escaped = (f.text.replace("\\", "\\\\").replace("%", "\\%")
+                       .replace("_", "\\_"))
+            like = "%" + escaped + "%"
+            where.append(
+                "(p.world_name LIKE ? ESCAPE '\\' OR p.filename LIKE ? ESCAPE '\\' "
+                "OR EXISTS(SELECT 1 FROM photo_players pp WHERE pp.photo_id=p.id "
+                "AND pp.name LIKE ? ESCAPE '\\'))")
             params += [like, like, like]
         return " AND ".join(where), params
 
@@ -386,7 +441,7 @@ class Database:
         order = "DESC" if f.sort_desc else "ASC"
         sql = (f"SELECT p.id, p.path, p.taken_at, p.day, p.world_id, p.world_name, "
                f"p.favorite, p.width, p.height, p.filesize, p.meta_source, p.mtime, "
-               f"p.avatar_name, p.session_id, p.instance_type "
+               f"p.avatar_name, p.session_id, p.instance_type, p.rating, p.is_video "
                f"FROM photos p WHERE {where} ORDER BY p.taken_at {order}, p.id {order}")
         with self._lock:
             return self._conn.execute(sql, params).fetchall()
@@ -407,6 +462,27 @@ class Database:
                 (pid,)).fetchall()
         return r, [(p["name"], p["user_id"]) for p in pl]
 
+    def set_rating(self, pids, stars):
+        stars = max(0, min(5, int(stars)))
+        with self._lock:
+            self._conn.executemany("UPDATE photos SET rating=? WHERE id=?",
+                                   [(stars, p) for p in pids])
+            self._conn.commit()
+
+    def region_summary(self):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT region, COUNT(*) c FROM photos "
+                "WHERE missing=0 AND region IS NOT NULL AND region != '' "
+                "GROUP BY region ORDER BY c DESC").fetchall()
+
+    def instance_summary(self):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT instance_type, COUNT(*) c FROM photos "
+                "WHERE missing=0 AND instance_type IS NOT NULL AND instance_type != '' "
+                "GROUP BY instance_type ORDER BY c DESC").fetchall()
+
     def set_favorite(self, pids, on):
         with self._lock:
             self._conn.executemany("UPDATE photos SET favorite=? WHERE id=?",
@@ -426,6 +502,58 @@ class Database:
         with self._lock:
             self._conn.executemany("UPDATE photos SET missing=1 WHERE id=?", [(p,) for p in pids])
             self._conn.commit()
+
+    # ---------- in-frame tags ----------
+
+    def photo_tags(self, photo_id):
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT name, x, y FROM photo_tags WHERE photo_id=? ORDER BY name",
+                (photo_id,)).fetchall()
+        return [(r["name"], r["x"], r["y"]) for r in rows]
+
+    def tags_for_photos(self, ids):
+        ids = [i for i in ids if i]
+        if not ids:
+            return {}
+        q = ",".join("?" * len(ids))
+        with self._lock:
+            rows = self._conn.execute(
+                f"SELECT photo_id, name, x, y FROM photo_tags WHERE photo_id IN ({q})",
+                list(ids)).fetchall()
+        out = {}
+        for r in rows:
+            out.setdefault(r["photo_id"], []).append((r["name"], r["x"], r["y"]))
+        return out
+
+    def set_photo_tag(self, photo_id, name, x, y, when=""):
+        """Placing the same name twice moves the existing marker."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO photo_tags(photo_id, name, x, y, created_at) "
+                "VALUES(?,?,?,?,?) ON CONFLICT(photo_id, name) DO UPDATE SET x=?, y=?",
+                (photo_id, name, float(x), float(y), when, float(x), float(y)))
+            self._conn.commit()
+
+    def remove_photo_tag(self, photo_id, name):
+        with self._lock:
+            self._conn.execute("DELETE FROM photo_tags WHERE photo_id=? AND name=?",
+                               (photo_id, name))
+            self._conn.commit()
+
+    def tag_names(self, limit=200):
+        """Everyone ever tagged, most used first — the picker's memory."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT name, COUNT(*) c FROM photo_tags GROUP BY name "
+                "ORDER BY c DESC, name LIMIT ?", (limit,)).fetchall()
+        return [r["name"] for r in rows]
+
+    def tagged_count(self):
+        with self._lock:
+            r = self._conn.execute(
+                "SELECT COUNT(DISTINCT photo_id) c FROM photo_tags").fetchone()
+        return r["c"] if r else 0
 
     # ---------- albums ----------
 
@@ -845,7 +973,8 @@ class Database:
     # ---------- cleanup ----------
 
     def unscanned(self, limit=0):
-        sql = "SELECT id, path, mtime, filesize FROM photos WHERE missing=0 AND scanned=0 ORDER BY taken_at DESC"
+        sql = ("SELECT id, path, mtime, filesize FROM photos "
+               "WHERE missing=0 AND scanned=0 AND is_video=0 ORDER BY taken_at DESC")
         if limit:
             sql += f" LIMIT {int(limit)}"
         with self._lock:

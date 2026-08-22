@@ -27,6 +27,7 @@ class Bridge(QObject):
     headset_found = Signal(str, str, str, list, str)   # adb, serial, dir, names, dest
     sheet_ready = Signal(str)    # path of a rendered contact sheet
     backup_planned = Signal(str, list, int, int, bool)
+    update_available = Signal(str, str)      # tag, release page url
 
 
 class IndexWorker(QThread):
@@ -71,7 +72,8 @@ class IndexWorker(QThread):
             iso = _iso(t)
             batch.append({"path": p, "folder": os.path.dirname(p),
                           "filename": os.path.basename(p), "taken_at": iso,
-                          "day": iso[:10], "filesize": st.st_size, "mtime": st.st_mtime})
+                          "day": iso[:10], "filesize": st.st_size, "mtime": st.st_mtime,
+                          "is_video": 1 if imaging.is_video(p) else 0})
             if not k:
                 new_count += 1
             if len(batch) >= 500:
@@ -122,15 +124,16 @@ class IndexWorker(QThread):
                 continue
             m = matcher.match(dt)
             rec = {"id": r["id"], "session_id": None, "avatar": None, "instance_type": "",
-                   "world_id": None, "world_name": None, "source": "none", "players": []}
+                   "region": "", "world_id": None, "world_name": None,
+                   "source": "none", "players": []}
             if m:
-                sid, wid, wname, players, itype = m
+                sid, wid, wname, players, itype, region = m
                 # only claim an avatar for a photo we can actually place in a
                 # session — otherwise a stale switch event would label unrelated
                 # shots taken days later
                 rec.update(session_id=sid, world_id=wid, world_name=wname,
                            source="log", players=players, avatar=matcher.avatar_at(dt),
-                           instance_type=itype)
+                           instance_type=itype, region=region)
             if r["meta_source"] == "vrcx":
                 rec["source"] = "vrcx"
             matches.append(rec)

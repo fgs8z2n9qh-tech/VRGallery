@@ -13,7 +13,15 @@ from . import paths
 
 THUMB_PX = 512
 IMAGE_EXTS = {".png", ".jpg", ".jpeg", ".webp"}
+# recordings people make of the same sessions, usually with OBS into the same
+# folder; indexed so they sit on the timeline, but never decoded
+VIDEO_EXTS = {".mp4", ".mov", ".mkv", ".webm", ".avi"}
+MEDIA_EXTS = IMAGE_EXTS | VIDEO_EXTS
 SKIP_DIR_NAMES = {"ipod photo cache"}
+
+
+def is_video(path):
+    return os.path.splitext(path)[1].lower() in VIDEO_EXTS
 
 # VRChat_2026-08-21_18-52-08.986_3840x2160.png  (new)
 RE_NEW = re.compile(r"(\d{4})-(\d{2})-(\d{2})_(\d{2})-(\d{2})-(\d{2})(?:\.(\d{1,3}))?")
@@ -174,7 +182,7 @@ def scan_folder_files(folders):
                        if d.lower() not in SKIP_DIR_NAMES and not d.startswith(".")]
             for fn in files:
                 ext = os.path.splitext(fn)[1].lower()
-                if ext not in IMAGE_EXTS:
+                if ext not in MEDIA_EXTS:
                     continue
                 p = os.path.join(root, fn)
                 pl = p.lower()

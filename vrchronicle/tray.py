@@ -11,6 +11,7 @@ class Tray(QObject):
     open_page = Signal(str)
     reindex = Signal()
     slideshow = Signal()
+    wallpaper = Signal()
     quit_app = Signal()
 
     def __init__(self, parent=None):
@@ -28,6 +29,9 @@ class Tray(QObject):
         act_slide = m.addAction(icons.qicon("play", style.PAL["dim"], 16),
                                 "Slideshow of favorites")
         act_slide.triggered.connect(self.slideshow)
+        act_wall = m.addAction(icons.qicon("image", style.PAL["dim"], 16),
+                               "Shuffle desktop wallpaper")
+        act_wall.triggered.connect(self.wallpaper)
         m.addSeparator()
         act_idx = m.addAction(icons.qicon("refresh", style.PAL["dim"], 16), "Index now")
         act_idx.triggered.connect(self.reindex)

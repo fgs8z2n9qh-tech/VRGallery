@@ -1,0 +1,30 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pytest
+      - name: Tests
+        run: python -m pytest tests -q
+      - name: Import check
+        # every module must import cleanly, headless, on a machine that has no
+        # VRChat and no library
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          python -c "import pkgutil, importlib, vrchronicle; [importlib.import_module('vrchronicle.' + m.name) for m in pkgutil.iter_modules(vrchronicle.__path__)]; print('all modules import')"

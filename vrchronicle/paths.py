@@ -6,7 +6,7 @@ import faulthandler
 APP_NAME = "VRChronicle"
 APP_TAGLINE = "VRChat photo album"
 APP_ID = "VRChronicle.Desktop"      # AppUserModelID: taskbar grouping identity
-APP_VERSION = "1.1.0"
+APP_VERSION = "1.2.0"
 _LEGACY_NAMES = ("Aperture",)     # data dirs from before the rename
 
 APPDIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_NAME)
@@ -87,6 +87,21 @@ def enable_crash_log():
         faulthandler.enable(file=_crash_fh)
     except Exception:
         pass
+
+
+def pretty(path):
+    """A path fit to show on screen: the home directory as %USERPROFILE%.
+
+    Shorter to read, and it keeps the account name out of screenshots and
+    support pastes.
+    """
+    if not path:
+        return ""
+    home = os.path.expanduser("~")
+    p = os.path.normpath(str(path))
+    if p.lower().startswith(os.path.normpath(home).lower()):
+        return "%USERPROFILE%" + p[len(os.path.normpath(home)):]
+    return p
 
 
 def app_root():

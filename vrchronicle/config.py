@@ -37,6 +37,9 @@ DEFAULTS = {
     "backup_dir": "",
     "backup_verify_hash": False,
     "adb_path": "",
+    # first run / updates
+    "onboarded": False,
+    "check_updates": True,
     "_tray_hint_shown": False,
 }
 
@@ -68,6 +71,9 @@ class Config:
             d = paths.default_vrchat_pictures()
             if os.path.isdir(d):
                 self._d["folders"] = [d]
+        # a library that predates the welcome screen has already been set up
+        if not self._d.get("onboarded") and os.path.exists(paths.DB_PATH):
+            self._d["onboarded"] = True
 
     def save(self):
         paths.ensure_dirs()

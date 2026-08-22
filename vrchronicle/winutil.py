@@ -118,6 +118,24 @@ def autostart_command(extra_args=""):
     return exe, f'"{script}" {extra_args}'.strip()
 
 
+SPI_SETDESKWALLPAPER = 20
+SPIF_UPDATEINIFILE = 0x01
+SPIF_SENDCHANGE = 0x02
+
+
+def set_wallpaper(image_path):
+    """Point Windows at an image file. Needs a real path, not a URL."""
+    if not os.path.exists(image_path):
+        return False
+    try:
+        ok = ctypes.windll.user32.SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER, 0, os.path.abspath(image_path),
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE)
+        return bool(ok)
+    except Exception:
+        return False
+
+
 def open_url(url):
     """Open an http(s) URL in the default browser, nothing else."""
     if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
