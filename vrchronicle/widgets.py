@@ -175,10 +175,15 @@ class Card(QFrame):
         self.vbox = QVBoxLayout(self)
         self.vbox.setContentsMargins(18, 16, 18, 16)
         self.vbox.setSpacing(12)
+        self._title = None
         if title:
-            t = QLabel(title)
-            t.setObjectName("CardTitle")
-            self.vbox.addWidget(t)
+            self._title = QLabel(title)
+            self._title.setObjectName("CardTitle")
+            self.vbox.addWidget(self._title)
+
+    def set_title(self, title):
+        if self._title is not None:
+            self._title.setText(title)
 
 
 class StatCard(QFrame):

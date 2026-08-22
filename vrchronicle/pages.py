@@ -912,10 +912,10 @@ class StatsPage(QWidget):
         for c in (self.c_total, self.c_size, self.c_worlds, self.c_people, self.c_day):
             cards.addWidget(c)
         v.addLayout(cards)
-        card_m = widgets.Card("PHOTOS PER MONTH")
+        self.card_months = widgets.Card("PHOTOS PER MONTH")
         self.chart_months = charts.BarChart(self.main.cfg)
-        card_m.vbox.addWidget(self.chart_months)
-        v.addWidget(card_m)
+        self.card_months.vbox.addWidget(self.chart_months)
+        v.addWidget(self.card_months)
         row = QHBoxLayout()
         row.setSpacing(12)
         card_w = widgets.Card("TOP WORLDS")
@@ -976,8 +976,18 @@ class StatsPage(QWidget):
             self.c_day.set(f'{s["busiest"]["c"]} photos', f"busiest day · {d}")
         else:
             self.c_day.set("–", "busiest day")
-        months = s["months"][-24:]
-        self.chart_months.set_data([(fmt.month_label(m["m"]), m["c"]) for m in months])
+        if year:
+            months = s["months"][-24:]
+            self.card_months.set_title("PHOTOS PER MONTH")
+            self.chart_months.set_data([(fmt.month_label(m["m"]), m["c"]) for m in months])
+        else:
+            # "All time" should actually show all of time: a hundred month bars
+            # would be unreadable, so the whole library is grouped by year
+            per_year = {}          # months arrive sorted, so years come out sorted
+            for m in s["months"]:
+                per_year[m["m"][:4]] = per_year.get(m["m"][:4], 0) + m["c"]
+            self.card_months.set_title("PHOTOS PER YEAR")
+            self.chart_months.set_data(list(per_year.items()))
         self.chart_worlds.set_data([(w["name"] or "?", w["c"]) for w in s["top_worlds"]])
         self.chart_people.set_data([(p["name"], p["c"]) for p in s["top_people"]])
         self.chart_hours.set_data(s["hours"])

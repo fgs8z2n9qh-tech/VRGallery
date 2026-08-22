@@ -111,8 +111,13 @@ def test_the_year_picker_actually_changes_the_statistics(window):
     assert page.cb_year.itemData(0) == ""            # "All time" comes first
     assert page.cb_year.count() > 1, "the library's year is missing"
 
+    # "All time" groups the whole library by year, not by month
+    assert page.selected_year() == ""
+    assert page.card_months._title.text() == "PHOTOS PER YEAR"
+
     before = page.lab_sub.text()
     page.cb_year.setCurrentIndex(1)                  # pick the only real year
+    assert page.card_months._title.text() == "PHOTOS PER MONTH"
     assert page.selected_year() == page.cb_year.currentText()
     assert page.lab_sub.text() != before, "picking a year changed nothing"
     assert page.lab_sub.text().startswith(page.selected_year())
