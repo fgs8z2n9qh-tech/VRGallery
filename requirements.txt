@@ -1,0 +1,5 @@
+PySide6>=6.6
+Pillow>=10.0
+
+# only needed to produce dist\VRChronicle\VRChronicle.exe via build.ps1
+pyinstaller>=6.0

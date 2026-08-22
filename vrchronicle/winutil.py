@@ -1,0 +1,150 @@
+"""Windows helpers: recycle bin, dark titlebar, AppUserModelID, Explorer reveal."""
+import ctypes
+import os
+import subprocess
+import sys
+from ctypes import wintypes
+
+FO_DELETE = 3
+FOF_ALLOWUNDO = 0x40
+FOF_NOCONFIRMATION = 0x10
+FOF_SILENT = 0x4
+FOF_NOERRORUI = 0x400
+# FOF_ALLOWUNDO is best-effort: when the shell cannot put an item in a Recycle Bin
+# (network share, most removable media, bin disabled or full) it deletes for good.
+# FOF_WANTNUKEWARNING partially overrides FOF_NOCONFIRMATION and forces a prompt in
+# exactly that case, which is the difference between "moved to the bin" and "gone".
+FOF_WANTNUKEWARNING = 0x4000
+
+
+class SHFILEOPSTRUCTW(ctypes.Structure):
+    _fields_ = [
+        ("hwnd", wintypes.HWND),
+        ("wFunc", wintypes.UINT),
+        ("pFrom", wintypes.LPCWSTR),
+        ("pTo", wintypes.LPCWSTR),
+        ("fFlags", ctypes.c_ushort),
+        ("fAnyOperationsAborted", wintypes.BOOL),
+        ("hNameMappings", ctypes.c_void_p),
+        ("lpszProgressTitle", wintypes.LPCWSTR),
+    ]
+
+
+def recycle(paths_list):
+    """Move files to the Recycle Bin.
+
+    Returns (removed_paths, err_message_or_empty) — `removed_paths` is the subset
+    that genuinely disappeared, verified afterwards, so callers never mark a file
+    as gone when it is still sitting on disk.
+    """
+    files = [os.path.abspath(p) for p in paths_list if p and os.path.exists(p)]
+    if not files:
+        return [], ""
+    buf = ctypes.create_unicode_buffer("\x00".join(files) + "\x00\x00")
+    op = SHFILEOPSTRUCTW()
+    op.hwnd = None
+    op.wFunc = FO_DELETE
+    op.pFrom = ctypes.cast(buf, wintypes.LPCWSTR)
+    op.pTo = None
+    # FOF_SILENT only hides the progress bar; it does not suppress the nuke warning.
+    # FOF_NOERRORUI is deliberately NOT set, so a real failure explains itself.
+    op.fFlags = FOF_ALLOWUNDO | FOF_NOCONFIRMATION | FOF_WANTNUKEWARNING | FOF_SILENT
+    res = ctypes.windll.shell32.SHFileOperationW(ctypes.byref(op))
+    removed = [f for f in files if not os.path.exists(f)]
+    if res != 0 or op.fAnyOperationsAborted:
+        if len(removed) == len(files):
+            return removed, ""          # user-visible dialog, but it all went through
+        return removed, ("cancelled" if op.fAnyOperationsAborted
+                         else f"SHFileOperation error ({res})")
+    return removed, ""
+
+
+def dark_titlebar(hwnd):
+    try:
+        DWMWA_USE_IMMERSIVE_DARK_MODE = 20
+        val = ctypes.c_int(1)
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            int(hwnd), DWMWA_USE_IMMERSIVE_DARK_MODE,
+            ctypes.byref(val), ctypes.sizeof(val))
+    except Exception:
+        pass
+
+
+def set_app_id(app_id="VRChronicle.Desktop"):
+    try:
+        ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
+    except Exception:
+        pass
+
+
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+
+
+def get_autostart(name):
+    """-> the stored command line, or '' when autostart is off."""
+    try:
+        import winreg
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            return winreg.QueryValueEx(k, name)[0]
+    except OSError:
+        return ""
+
+
+def set_autostart(name, command):
+    """command='' removes the entry. HKCU only — never needs admin."""
+    try:
+        import winreg
+        with winreg.CreateKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            if command:
+                winreg.SetValueEx(k, name, 0, winreg.REG_SZ, command)
+            else:
+                try:
+                    winreg.DeleteValue(k, name)
+                except FileNotFoundError:
+                    pass
+        return True
+    except OSError:
+        return False
+
+
+def autostart_command(extra_args=""):
+    """(executable, arguments) that will relaunch this app, frozen or from source."""
+    if getattr(sys, "frozen", False):
+        return sys.executable, extra_args
+    script = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                          "run.py")
+    pyw = os.path.join(os.path.dirname(sys.executable), "pythonw.exe")
+    exe = pyw if os.path.exists(pyw) else sys.executable
+    return exe, f'"{script}" {extra_args}'.strip()
+
+
+def open_url(url):
+    """Open an http(s) URL in the default browser, nothing else."""
+    if not isinstance(url, str) or not url.lower().startswith(("http://", "https://")):
+        return False
+    import webbrowser
+    webbrowser.open(url)
+    return True
+
+
+def _explorer_exe():
+    """Full path, so PATH cannot decide which 'explorer' we launch."""
+    win = os.environ.get("SystemRoot") or r"C:\Windows"
+    exe = os.path.join(win, "explorer.exe")
+    return exe if os.path.exists(exe) else "explorer.exe"
+
+
+def reveal_in_explorer(path):
+    if os.path.exists(path):
+        subprocess.Popen([_explorer_exe(), "/select,", os.path.normpath(path)])
+    else:
+        folder = os.path.dirname(path)
+        if os.path.isdir(folder):
+            os.startfile(folder)
+
+
+def open_file(path):
+    try:
+        os.startfile(path)
+    except OSError:
+        pass

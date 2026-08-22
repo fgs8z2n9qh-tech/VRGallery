@@ -1,0 +1,23 @@
+# build output and environment
+.venv/
+dist/
+build/
+*.spec
+__pycache__/
+*.py[cod]
+
+# local data that must never be published: the library, thumbnails, the
+# Discord webhook and the local-API token all live here
+*.db
+*.db-wal
+*.db-shm
+config.json
+crash.log
+thumbs/
+exports/
+
+# editor / OS
+.vscode/
+.idea/
+Thumbs.db
+desktop.ini
