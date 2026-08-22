@@ -334,14 +334,19 @@ def test_the_floating_panels_render_their_glass(window, app):
     bar = page.view.verticalScrollBar()
     bar.setValue(int(bar.maximum() * 0.35))
     app.processEvents()
-    page._sync_sticky()
-    assert not page.sticky.isHidden()
 
-    # the sticky sits over photos, so the backdrop must actually be sampled
-    blurred, offset = Glass.backdrop(page.sticky, page.view.viewport())
+    from PySide6.QtCore import QItemSelectionModel
+    sel = page.view.selectionModel()
+    for row in range(3, 6):
+        sel.select(page.model.index(row, 0), QItemSelectionModel.Select)
+    app.processEvents()
+    assert not page.selbar.isHidden(), "selecting photos should raise the bar"
+
+    # the selection bar floats over photos, so its backdrop is really sampled
+    blurred, offset = Glass.backdrop(page.selbar, page.view.viewport())
     assert blurred is not None and not blurred.isNull()
     assert offset.x() <= 0 and offset.y() <= 0, "the sample must start outside the panel"
-    assert blurred.width() >= page.sticky.width()
+    assert blurred.width() >= page.selbar.width()
 
     for w in (page.sticky, page.selbar):
         w.resize(max(80, w.width()), max(24, w.height()))

@@ -19,8 +19,28 @@ class Glass:
     rendering the parent would draw the panel into its own backdrop.
     """
 
-    SHRINK = 12          # how far down the sample is squashed before blowing up
-    MARGIN = 20          # sample past the edges, so they blur from real content
+    RADIUS = 22          # roughly, in screen pixels
+    MARGIN = 28          # sample past the edges, so they blur from real content
+
+    @staticmethod
+    def _blur(pm, radius=RADIUS):
+        """Halve, then double back.
+
+        Halving with a smooth transform is a true 2x2 average, so a few of them
+        in a row approximate a gaussian. One hard shrink and one hard blow-up
+        does not: it leaves the sample in visible square blocks.
+        """
+        w, h = max(1, pm.width()), max(1, pm.height())
+        small, steps = pm, 0
+        while steps < 5 and (1 << steps) < radius and small.width() > 6 and small.height() > 6:
+            small = small.scaled(max(1, small.width() // 2), max(1, small.height() // 2),
+                                 Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            steps += 1
+        for _ in range(steps):       # back up the same way, so nothing steps
+            small = small.scaled(min(w, max(1, small.width() * 2)),
+                                 min(h, max(1, small.height() * 2)),
+                                 Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        return small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
 
     @staticmethod
     def backdrop(widget, source):
@@ -40,11 +60,7 @@ class Glass:
         pm = source.grab(area)
         if pm.isNull():
             return None, None
-        small = pm.size() / Glass.SHRINK
-        if small.width() < 2 or small.height() < 2:
-            small = QSize(max(2, small.width()), max(2, small.height()))
-        blurred = pm.scaled(small, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        blurred = blurred.scaled(pm.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        blurred = Glass._blur(pm)
         # where the sample sits relative to the widget's own origin
         return blurred, QPoint(area.x() - top_left.x(), area.y() - top_left.y())
 

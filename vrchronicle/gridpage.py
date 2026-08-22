@@ -231,10 +231,11 @@ class StickyDay(QWidget):
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         r = QRectF(self.rect())
-        # square top corners: it is pinned to the edge, not floating free
-        if not widgets.Glass.paint(p, self, self._glass, radius=0,
-                                   tint=style.PAL["bg"], tint_alpha=205):
-            p.fillRect(r, QColor(style.PAL["bg"]))
+        # Solid, deliberately. This bar spans the whole width while the photos
+        # under it only reach partway across, so glass here is half smeared
+        # picture and half flat background -- lopsided, and blurring a 38px
+        # strip only ever produces bands.
+        p.fillRect(r, QColor(style.PAL["bg"]))
         p.setPen(QColor(style.PAL["border"]))
         p.drawLine(QPointF(r.left(), r.bottom() - 0.5),
                    QPointF(r.right(), r.bottom() - 0.5))

@@ -135,10 +135,15 @@ def main(argv=None):
                 page0 = win.page_grid
                 bar = page0.view.verticalScrollBar()
                 base = int(bar.maximum() * 0.12) or 400
-                for extra in range(0, 600, 15):     # land inside a day, not on its header
+                from PySide6.QtCore import QPoint as _QP
+                from .gridmodel import KindRole as _KR, KIND_PHOTO as _KP
+                vp = page0.view.viewport()
+                for extra in range(0, 900, 15):     # inside a day, photos at the foot
                     bar.setValue(base + extra)
                     page0._sync_sticky()
-                    if not page0.sticky.isHidden():
+                    under = page0.view.indexAt(_QP(vp.width() // 2, vp.height() - 60))
+                    if (not page0.sticky.isHidden()
+                            and under.isValid() and under.data(_KR) == _KP):
                         break
                 if key == "glass":              # ...with the floating panels up
                     from PySide6.QtCore import QItemSelectionModel
