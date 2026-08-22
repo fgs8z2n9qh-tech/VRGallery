@@ -287,6 +287,7 @@ class PhotoDelegate(QStyledItemDelegate):
         self.cache = cache
         self.cell_w = 176
         self.radius = 12
+        self.dense = False
         self._accent = style.ACCENTS["orchid"]["a"]
         self._f_head = QFont()
         self._f_head.setPointSizeF(10.5)
@@ -303,8 +304,20 @@ class PhotoDelegate(QStyledItemDelegate):
     def set_cell_width(self, w):
         self.cell_w = int(w)
 
+    def set_dense(self, on):
+        """Continuous mode: square tiles that divide the row exactly."""
+        self.dense = bool(on)
+        self.radius = 3 if self.dense else 12
+
     # --- geometry ---
     def cell_size(self):
+        if getattr(self, "dense", False):
+            gap = self.view.spacing() * 2
+            vw = max(120, self.view.viewport().width() - gap)
+            # as many as fit at roughly the chosen size, then share the row out
+            n = max(1, round(vw / max(60, self.cell_w * 0.72)))
+            side = int((vw - gap * (n - 1)) / n)
+            return QSize(side, side)
         return QSize(self.cell_w, int(self.cell_w * 9 / 16))
 
     def period_size(self):

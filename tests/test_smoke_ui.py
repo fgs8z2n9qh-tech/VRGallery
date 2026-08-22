@@ -378,6 +378,88 @@ def test_the_grid_scrolls_under_the_floating_header(window, app):
     window.hide()
 
 
+def test_the_header_shrinks_once_you_are_scrolled_in(window, app):
+    """And the grid must not jump while it does."""
+    from PySide6.QtTest import QTest
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    open_h = page.headbar.height()
+    reserved = page.head_height()
+    assert page.titlecol.maximumWidth() > 0
+    assert not page._collapsed
+
+    bar = page.view.verticalScrollBar()
+    bar.setValue(page.COLLAPSE_AT + 40)
+    app.processEvents()
+    assert page._collapsed
+    page._apply_collapse(1.0)                 # skip to the end of the animation
+    assert page.headbar.height() < open_h, "the header did not shrink"
+    assert page.titlecol.maximumWidth() == 0
+    assert page._title_fx.opacity() == 0.0
+    # what the grid leaves free must NOT follow it, or the content jumps
+    assert page.head_height() == reserved
+    # and the pinned day follows the header down to its new height
+    assert page.head_now() < reserved
+
+    bar.setValue(0)
+    app.processEvents()
+    assert not page._collapsed
+    page._apply_collapse(0.0)
+    assert page.headbar.height() == open_h
+    assert page.titlecol.maximumWidth() > 0
+    assert page.head_height() == reserved
+    window.hide()
+
+
+def test_all_shows_one_continuous_sheet_of_photos(window, app):
+    """No day headings, square tiles, and the row divided exactly."""
+    from PySide6.QtTest import QTest
+    from vrchronicle.gridmodel import KIND_HEADER, KIND_PHOTO, KindRole
+
+    rows = _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    page.set_level("day")
+    app.processEvents()
+    kinds = [page.model.index(r, 0).data(KindRole)
+             for r in range(page.model.rowCount())]
+    assert KIND_HEADER in kinds, "Days groups by day"
+
+    page.set_level("all")
+    app.processEvents()
+    kinds = [page.model.index(r, 0).data(KindRole)
+             for r in range(page.model.rowCount())]
+    assert KIND_HEADER not in kinds, "All must be one uninterrupted run"
+    assert kinds.count(KIND_PHOTO) == len(rows) + 1     # + the fixture's photo
+    assert page.delegate.dense and page.view.spacing() == 2
+
+    cell = page.delegate.cell_size()
+    assert cell.width() == cell.height(), "tiles are square in this mode"
+    gap = page.view.spacing() * 2
+    vw = page.view.viewport().width() - gap
+    n = max(1, round(vw / (cell.width() + gap)))
+    assert abs(n * cell.width() + (n - 1) * gap - vw) <= n, "the row does not divide"
+    assert page.sticky.isHidden(), "there are no days to pin here"
+
+    page.set_level("day")                    # and back, without leftovers
+    app.processEvents()
+    assert not page.delegate.dense and page.view.spacing() == 7
+    assert page.delegate.cell_size().width() != page.delegate.cell_size().height()
+    window.hide()
+
+
 def test_the_floating_panels_render_their_glass(window, app):
     """Glass samples a sibling's content, which mapTo cannot address.
 

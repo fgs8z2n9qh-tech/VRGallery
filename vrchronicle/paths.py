@@ -6,7 +6,7 @@ import faulthandler
 APP_NAME = "VRChronicle"
 APP_TAGLINE = "VRChat photo album"
 APP_ID = "VRChronicle.Desktop"      # AppUserModelID: taskbar grouping identity
-APP_VERSION = "1.8.2"
+APP_VERSION = "1.9.0"
 _LEGACY_NAMES = ("Aperture",)     # data dirs from before the rename
 
 APPDIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_NAME)

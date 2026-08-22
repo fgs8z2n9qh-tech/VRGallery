@@ -1,10 +1,10 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import (QDate, QEvent, QPoint, QPointF, QRectF, QSize, Qt,
-                            QTimer, Signal)
+from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPoint, QPointF, QRectF,
+                            QSize, Qt, QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
-                               QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
-                               QSlider, QVBoxLayout, QWidget)
+                               QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
+                               QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget)
 
 from . import fmt, icons, style, vrclog, widgets
 from .db import PhotoFilter
@@ -287,7 +287,9 @@ class GridPage(QWidget):
         self.btn_back.clicked.connect(self.back_requested)
         self.btn_back.hide()
         head.addWidget(self.btn_back)
-        tcol = QVBoxLayout()
+        self.titlecol = QWidget()
+        tcol = QVBoxLayout(self.titlecol)
+        tcol.setContentsMargins(0, 0, 0, 0)
         tcol.setSpacing(0)
         self.lab_title = QLabel(self.title_text)
         self.lab_title.setObjectName("PageHeaderTitle")
@@ -295,7 +297,9 @@ class GridPage(QWidget):
         self.lab_sub.setObjectName("PageHeaderSub")
         tcol.addWidget(self.lab_title)
         tcol.addWidget(self.lab_sub)
-        head.addLayout(tcol)
+        self._title_fx = QGraphicsOpacityEffect(self.titlecol)
+        self.titlecol.setGraphicsEffect(self._title_fx)
+        head.addWidget(self.titlecol)
         head.addSpacing(18)
 
         # Years / Months / Days, the way a photo library is normally browsed:
@@ -306,7 +310,8 @@ class GridPage(QWidget):
         lv.setSpacing(6)
         self.level_group = QButtonGroup(self)
         self.level_group.setExclusive(True)
-        for key, label in (("year", "Years"), ("month", "Months"), ("day", "Days")):
+        for key, label in (("year", "Years"), ("month", "Months"),
+                           ("day", "Days"), ("all", "All")):
             b = QPushButton(label)
             b.setObjectName("PillBtn")
             b.setCheckable(True)
@@ -367,6 +372,7 @@ class GridPage(QWidget):
         hw.setSpacing(0)
         hw.addWidget(self.headbar)
         hw.addWidget(self._build_filter_bar())
+        self._init_header_collapse()
 
         # --- grid ---
         self.model = GridModel(self)
@@ -533,7 +539,7 @@ class GridPage(QWidget):
 
     def _level_clicked(self, level):
         """Picking a level from the control, rather than drilling into a card."""
-        if level == "day":
+        if level in ("day", "all"):
             # a month card narrows the dates; asking for Days means all of them
             self.filter.date_from = self.filter.date_to = ""
             self._sync_filter_bar(self.filter)
@@ -542,7 +548,7 @@ class GridPage(QWidget):
         self.set_level(level, self._level_year if level == "month" else "")
 
     def set_level(self, level, year=""):
-        """Zoom the library: 'year' -> 'month' -> 'day'."""
+        """Zoom the library: 'year' -> 'month' -> 'day' -> 'all'."""
         self.level = level
         if level != "month" or year:
             self._level_year = year
@@ -584,7 +590,12 @@ class GridPage(QWidget):
             return
         self.filter.sort_desc = self.sort_box.currentIndex() == 0
         self._rows = self.db.query_photos(self.filter)
-        self.model.set_photos(self._rows, group_by_day=True,
+        # 'All' is one uninterrupted sheet of photos: no day headings, square
+        # tiles, and almost no gap -- the library as a whole rather than as days
+        dense = self.level == "all"
+        self.delegate.set_dense(dense)
+        self.view.setSpacing(2 if dense else 7)
+        self.model.set_photos(self._rows, group_by_day=not dense,
                               top_gap=self.head_height())
         n = len(self._rows)
         total = sum((r["filesize"] or 0) for r in self._rows)
@@ -656,12 +667,13 @@ class GridPage(QWidget):
 
     def _sync_rail(self, _v=0):
         self.rail.set_pos(self.view.verticalScrollBar().value())
+        self._sync_header()
         self._sync_sticky()
 
     def _top_index(self):
         """First item under the floating header, skipping the layout gaps."""
         w = self.view.viewport().width()
-        start = self.head_height() + 2
+        start = self.head_now() + 2
         for y in range(start, start + 60, 4):
             for x in (8, w // 2, max(8, w - 14)):
                 ix = self.view.indexAt(QPoint(x, y))
@@ -671,7 +683,7 @@ class GridPage(QWidget):
 
     def _sync_sticky(self):
         """Pin the day you are inside, but not while its real header is visible."""
-        if self.level in ("year", "month") or not self.model.rowCount():
+        if self.level in ("year", "month", "all") or not self.model.rowCount():
             self.sticky.hide()
             return
         ix = self._top_index()
@@ -698,7 +710,7 @@ class GridPage(QWidget):
         # the glass under it can only be sampled from the viewport anyway
         vp = self.view.viewport()
         pos = vp.mapTo(self, QPoint(0, 0))
-        self.sticky.setGeometry(pos.x(), pos.y() + self.head_height(),
+        self.sticky.setGeometry(pos.x(), pos.y() + self.head_now(),
                                 vp.width(), StickyDay.HEIGHT)
 
     def _zoom_by(self, steps):
@@ -789,16 +801,79 @@ class GridPage(QWidget):
 
     HEAD_MARGIN = 8       # the floating header keeps the window's own border
 
+    # ---------------- the header shrinks once you are scrolled in ----------------
+    COLLAPSE_AT = 60          # px of scroll before the title gives up its room
+
+    PAD_OPEN, PAD_TIGHT = 10, 6
+
+    def _init_header_collapse(self):
+        """Measure both heights once, from the controls themselves.
+
+        The collapsed height has to clear the tallest control plus its padding.
+        Guessing it as "a bit less than the open one" cut the search box and the
+        pills in half.
+        """
+        self._head_expanded = self.headbar.sizeHint().height()
+        ctrl = max(self.search.sizeHint().height(),
+                   self.sort_box.sizeHint().height(),
+                   self.btn_play.sizeHint().height())
+        self._head_collapsed = min(self._head_expanded, ctrl + self.PAD_TIGHT * 2)
+        self._collapsed = False
+        self._collapse_anim = QVariantAnimation(self)
+        self._collapse_anim.setDuration(180)
+        self._collapse_anim.setEasingCurve(QEasingCurve.OutCubic)
+        self._collapse_anim.valueChanged.connect(self._apply_collapse)
+
+    def _apply_collapse(self, t):
+        """t: 0 fully open, 1 fully collapsed."""
+        w = self.titlecol.sizeHint().width()
+        self.titlecol.setMaximumWidth(max(0, int(w * (1 - t))))
+        self._title_fx.setOpacity(max(0.0, 1.0 - t * 1.6))
+        pad = round(self.PAD_OPEN + (self.PAD_TIGHT - self.PAD_OPEN) * t)
+        self.headbar.layout().setContentsMargins(24, pad, 24, pad)
+        h = self._head_expanded + (self._head_collapsed - self._head_expanded) * t
+        self.headbar.setFixedHeight(int(round(h)))
+        self._position_overlays()
+
+    def _sync_header(self):
+        if not hasattr(self, "_collapse_anim"):
+            return
+        want = self.view.verticalScrollBar().value() > self.COLLAPSE_AT
+        if want == self._collapsed:
+            return
+        self._collapsed = want
+        self._collapse_anim.stop()
+        start = self._collapse_anim.currentValue()
+        self._collapse_anim.setStartValue(float(start if start is not None
+                                                else (0.0 if want else 1.0)))
+        self._collapse_anim.setEndValue(1.0 if want else 0.0)
+        self._collapse_anim.start()
+
     def eventFilter(self, obj, ev):
         if obj is self.view.viewport() and ev.type() == QEvent.Resize:
             self._position_overlays()
+            if self.level == "all":       # square tiles are sized from the width
+                self.view.scheduleDelayedItemsLayout()
         return super().eventFilter(obj, ev)
 
     def head_height(self):
-        """What the grid has to leave free at the top, margins included."""
+        """What the grid leaves free at the top: always the OPEN height.
+
+        If this followed the header as it shrank, the spacer row would resize
+        under the content and the whole grid would jump while you scrolled.
+        """
         if not hasattr(self, "headwrap"):
             return 0
-        return self.headwrap.sizeHint().height() + self.HEAD_MARGIN
+        h = getattr(self, "_head_expanded", None) or self.headbar.sizeHint().height()
+        if self.filter_bar.isVisible():
+            h += self.filter_bar.sizeHint().height()
+        return h + self.HEAD_MARGIN
+
+    def head_now(self):
+        """How tall it is at this moment, for placing what sits under it."""
+        if not hasattr(self, "headwrap"):
+            return 0
+        return self.headwrap.height() + self.HEAD_MARGIN
 
     def _position_overlays(self, animate_selbar=False):
         if hasattr(self, "headwrap"):

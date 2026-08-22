@@ -23,13 +23,18 @@ still work.
 
 ## Browsing
 
-**Years → Months → Days.** Zoom out to find the stretch of time, then zoom in on it.
-Each year and month is a card showing the best photo of that period — a favourite,
-else the highest rated, else the newest.
+**Years → Months → Days → All.** Zoom out to find the stretch of time, then zoom in on
+it. Each year and month is a card showing the best photo of that period — a favourite,
+else the highest rated, else the newest. **All** drops the day headings entirely and
+lays the whole library out as one uninterrupted sheet of square tiles.
+
+![The continuous view](docs/13-continuous.png)
 
 ![Browsing by year](docs/11-years.png)
 
-At the Days level the day you are inside stays pinned to the top while you scroll,
+Scrolling down folds the page title away and the toolbar shrinks to just its controls;
+scrolling back to the top brings it out again. At the Days level the day you are inside
+stays pinned to the top while you scroll,
 **Ctrl+wheel** resizes the thumbnails without losing your place, and the rail down the
 right edge jumps through the years — point at it and it names the month you would
 land on.

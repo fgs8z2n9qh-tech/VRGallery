@@ -131,6 +131,12 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key == "collapsed":                # the header shrunk by scrolling
+                win.activate("all")
+                page0 = win.page_grid
+                page0.view.verticalScrollBar().setValue(600)
+                page0._sync_header()
+                page0._apply_collapse(1.0)
             elif key in ("scrolled", "glass"):      # mid-scroll, for the sticky day
                 win.activate("all")
                 page0 = win.page_grid
@@ -156,9 +162,10 @@ def main(argv=None):
                     rail._show_bubble(rail.height() * 0.35)
                     rail._hover_y = rail.height() * 0.35
                     rail.update()
-            elif key in ("years", "months"):        # the zoomed-out browsing levels
+            elif key in ("years", "months", "continuous"):
                 win.activate("all")
-                win.page_grid.set_level("year" if key == "years" else "month")
+                win.page_grid.set_level({"years": "year", "months": "month",
+                                         "continuous": "all"}[key])
             elif key == "rail":                     # the timeline rail, mid-drag
                 rail = win.page_grid.rail
                 rail._show_bubble(rail.height() * 0.45)
