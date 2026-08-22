@@ -304,12 +304,64 @@ def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
     top = page.model.day_of_row(page._top_index().row())
     assert page.sticky._day == top[0]
     assert page.sticky._count == top[1]
-    assert page.sticky.width() == page.view.width()
+    assert page.sticky.width() == page.view.viewport().width()
 
     page.set_level("year")               # periods have no days to pin
     page._sync_sticky()
     assert page.sticky.isHidden()
     page._level_clicked("day")
+    window.hide()
+
+
+def test_the_floating_panels_render_their_glass(window, app):
+    """Glass samples a sibling's content, which mapTo cannot address.
+
+    These panels are painted by hand and nothing else in the suite draws them,
+    so a mapping or paint mistake would only ever show up on screen.
+    """
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtTest import QTest
+    from vrchronicle.widgets import Glass
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    bar = page.view.verticalScrollBar()
+    bar.setValue(int(bar.maximum() * 0.35))
+    app.processEvents()
+    page._sync_sticky()
+    assert not page.sticky.isHidden()
+
+    # the sticky sits over photos, so the backdrop must actually be sampled
+    blurred, offset = Glass.backdrop(page.sticky, page.view.viewport())
+    assert blurred is not None and not blurred.isNull()
+    assert offset.x() <= 0 and offset.y() <= 0, "the sample must start outside the panel"
+    assert blurred.width() >= page.sticky.width()
+
+    for w in (page.sticky, page.selbar):
+        w.resize(max(80, w.width()), max(24, w.height()))
+        target = QPixmap(w.size())
+        w.render(target)                       # raises if paintEvent throws
+        assert not target.isNull()
+
+    window.toast("Glass", "ok")
+    app.processEvents()
+    target = QPixmap(window.toast_w.size())
+    window.toast_w.render(target)
+    assert not target.isNull()
+
+    rail = page.rail
+    rail._show_bubble(rail.height() * 0.4)
+    assert rail._bubble is not None
+    target = QPixmap(rail._bubble.size())
+    rail._bubble.render(target)
+    assert not target.isNull()
+    rail._hide_bubble()
     window.hide()
 
 

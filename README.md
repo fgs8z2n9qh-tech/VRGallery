@@ -27,6 +27,13 @@ At the Days level the day you are inside stays pinned to the top while you scrol
 right edge jumps through the years — point at it and it names the month you would
 land on.
 
+Anything that floats over your photos — the pinned day, the selection bar, the rail's
+month bubble, notifications — is frosted glass: it samples what is underneath, blurs
+it, and tints it, so the panel belongs to the photo it is sitting on rather than
+covering it up.
+
+![Frosted panels over the grid](docs/12-glass.png)
+
 ## First run
 
 It says what it is going to read, from where, before it reads any of it.

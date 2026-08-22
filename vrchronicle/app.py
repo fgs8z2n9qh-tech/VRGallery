@@ -130,10 +130,26 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
-            elif key == "scrolled":                 # mid-scroll, for the sticky day
+            elif key in ("scrolled", "glass"):      # mid-scroll, for the sticky day
                 win.activate("all")
-                bar = win.page_grid.view.verticalScrollBar()
-                bar.setValue(int(bar.maximum() * 0.12) or 400)
+                page0 = win.page_grid
+                bar = page0.view.verticalScrollBar()
+                base = int(bar.maximum() * 0.12) or 400
+                for extra in range(0, 600, 15):     # land inside a day, not on its header
+                    bar.setValue(base + extra)
+                    page0._sync_sticky()
+                    if not page0.sticky.isHidden():
+                        break
+                if key == "glass":              # ...with the floating panels up
+                    from PySide6.QtCore import QItemSelectionModel
+                    page = win.page_grid
+                    sel = page.view.selectionModel()
+                    for row in (3, 4, 5):
+                        sel.select(page.model.index(row, 0), QItemSelectionModel.Select)
+                    rail = page.rail
+                    rail._show_bubble(rail.height() * 0.35)
+                    rail._hover_y = rail.height() * 0.35
+                    rail.update()
             elif key in ("years", "months"):        # the zoomed-out browsing levels
                 win.activate("all")
                 win.page_grid.set_level("year" if key == "years" else "month")

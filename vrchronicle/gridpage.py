@@ -20,6 +20,7 @@ class _RailBubble(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._text = ""
         self._accent = "#3d8bff"
+        self._glass = None
 
     def set_text(self, text, accent):
         self._text, self._accent = text, accent
@@ -38,7 +39,13 @@ class _RailBubble(QWidget):
         f.setWeight(QFont.DemiBold)
         p.setFont(f)
         r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        p.setBrush(QColor(12, 14, 20, 242))
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        if not widgets.Glass.paint(p, self, self._glass, radius=9,
+                                   tint="#0c0e14", tint_alpha=165):
+            p.setBrush(QColor(12, 14, 20, 242))
+            p.setPen(Qt.NoPen)
+            p.drawRoundedRect(r, 9, 9)
+        p.setBrush(Qt.NoBrush)
         p.setPen(QPen(QColor(self._accent), 1))
         p.drawRoundedRect(r, 9, 9)
         p.setPen(QColor(style.PAL["text"]))
@@ -159,6 +166,7 @@ class TimelineRail(QWidget):
             return self._hide_bubble()
         if self._bubble is None:
             self._bubble = _RailBubble(page)
+            self._bubble._glass = getattr(page, "view", None)
         self._bubble.set_text(label, style.accent(self._accent_key())["a"])
         w, h = self._bubble.width(), self._bubble.height()
         top_left = self.mapTo(page, QPoint(0, 0))
@@ -207,6 +215,7 @@ class StickyDay(QWidget):
         self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._day = ""
         self._count = 0
+        self._glass = None
         self.hide()
 
     def set_day(self, day, count):
@@ -214,11 +223,18 @@ class StickyDay(QWidget):
             self._day, self._count = day, count
             self.update()
 
+    def set_glass_source(self, w):
+        self._glass = w
+
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         r = QRectF(self.rect())
-        p.fillRect(r, QColor(style.PAL["bg"]))
+        # square top corners: it is pinned to the edge, not floating free
+        if not widgets.Glass.paint(p, self, self._glass, radius=0,
+                                   tint=style.PAL["bg"], tint_alpha=205):
+            p.fillRect(r, QColor(style.PAL["bg"]))
         p.setPen(QColor(style.PAL["border"]))
         p.drawLine(QPointF(r.left(), r.bottom() - 0.5),
                    QPointF(r.right(), r.bottom() - 0.5))
@@ -373,7 +389,9 @@ class GridPage(QWidget):
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
         self.sticky = StickyDay(self)
+        self.sticky.set_glass_source(self.view.viewport())
         self.selbar = widgets.SelectionBar(self)
+        self.selbar.set_glass_source(self.view.viewport())
         self.selbar.btn_fav.clicked.connect(self._fav_selection)
         self.selbar.btn_album.clicked.connect(self._album_selection)
         self.selbar.btn_trash.clicked.connect(self._delete_selection)
@@ -643,8 +661,11 @@ class GridPage(QWidget):
             return
         day, count, head_row = info
         if head_row >= 0:
-            top = self.view.visualRect(self.model.index(head_row, 0)).top()
-            if top > -6:                 # the real one is right there; two would read oddly
+            real = self.view.visualRect(self.model.index(head_row, 0))
+            # While ANY of the real header is still on screen, do not pin: the
+            # pinned copy would sit on top of it and its own text would ghost
+            # through the glass.
+            if real.bottom() > 0:
                 self.sticky.hide()
                 return
         self.sticky.set_day(day, count)
@@ -653,8 +674,11 @@ class GridPage(QWidget):
         self.sticky.raise_()
 
     def _place_sticky(self):
-        pos = self.view.mapTo(self, QPoint(0, 0))
-        self.sticky.setGeometry(pos.x(), pos.y(), self.view.width(), StickyDay.HEIGHT)
+        # the viewport, not the view: it must not lie across the scrollbar, and
+        # the glass under it can only be sampled from the viewport anyway
+        vp = self.view.viewport()
+        pos = vp.mapTo(self, QPoint(0, 0))
+        self.sticky.setGeometry(pos.x(), pos.y(), vp.width(), StickyDay.HEIGHT)
 
     def _zoom_by(self, steps):
         """Ctrl+wheel: resize the thumbnails and stay where you were."""

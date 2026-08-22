@@ -1,10 +1,78 @@
 """Small reusable UI pieces: flow layout, toast, cards, empty state, buttons."""
-from PySide6.QtCore import QEasingCurve, QPoint, QPropertyAnimation, QRect, QSize, Qt, QTimer
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect,
+                            QRectF, QSize, Qt, QTimer)
+from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
 
 from . import icons, style
+
+
+class Glass:
+    """Backdrop-blurred panel background, painted by hand.
+
+    Qt has no backdrop filter, so what is underneath is grabbed from a nominated
+    source widget, shrunk hard and scaled back up smoothly -- a cheap blur that
+    costs one small pixmap -- then tinted, edged with a hairline and given a soft
+    highlight along the top. The source is named explicitly rather than taken
+    from the parent, because a panel is a child of what it floats over and
+    rendering the parent would draw the panel into its own backdrop.
+    """
+
+    SHRINK = 12          # how far down the sample is squashed before blowing up
+    MARGIN = 20          # sample past the edges, so they blur from real content
+
+    @staticmethod
+    def backdrop(widget, source):
+        if source is None or not source.isVisible():
+            return None, None
+        # Global coordinates, not mapTo: the panel floats over a widget that is
+        # usually a sibling's child, and mapTo only works towards an ancestor.
+        try:
+            top_left = source.mapFromGlobal(widget.mapToGlobal(QPoint(0, 0)))
+        except RuntimeError:
+            return None, None
+        area = QRect(top_left, widget.size()).adjusted(
+            -Glass.MARGIN, -Glass.MARGIN, Glass.MARGIN, Glass.MARGIN)
+        area = area.intersected(source.rect())
+        if area.width() < 4 or area.height() < 4:
+            return None, None
+        pm = source.grab(area)
+        if pm.isNull():
+            return None, None
+        small = pm.size() / Glass.SHRINK
+        if small.width() < 2 or small.height() < 2:
+            small = QSize(max(2, small.width()), max(2, small.height()))
+        blurred = pm.scaled(small, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        blurred = blurred.scaled(pm.size(), Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        # where the sample sits relative to the widget's own origin
+        return blurred, QPoint(area.x() - top_left.x(), area.y() - top_left.y())
+
+    @staticmethod
+    def paint(p, widget, source, radius=16, tint=None, tint_alpha=150):
+        """Fill `widget`'s whole rect with glass. -> True if a backdrop was used."""
+        r = QRectF(widget.rect())
+        path = QPainterPath()
+        path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        p.save()
+        p.setClipPath(path)
+        blurred, offset = Glass.backdrop(widget, source)
+        base = QColor(tint or style.PAL["surface2"])
+        if blurred is not None:
+            p.drawPixmap(offset, blurred)
+            base.setAlpha(tint_alpha)          # let the blur show through the tint
+        p.fillRect(r, base)
+        # the specular sheen that makes it read as glass rather than as fog
+        sheen = QLinearGradient(r.left(), r.top(), r.left(), r.bottom())
+        sheen.setColorAt(0.0, QColor(255, 255, 255, 26))
+        sheen.setColorAt(0.45, QColor(255, 255, 255, 6))
+        sheen.setColorAt(1.0, QColor(0, 0, 0, 22))
+        p.fillRect(r, sheen)
+        p.restore()
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 46), 1))
+        p.drawPath(path)
+        return blurred is not None
 
 
 class FlowLayout(QLayout):
@@ -78,6 +146,7 @@ class Toast(QFrame):
         super().__init__(parent)
         self.setObjectName("Toast")
         self.setAttribute(Qt.WA_TransparentForMouseEvents)
+        self._glass_source = None
         lay = QHBoxLayout(self)
         lay.setContentsMargins(14, 9, 16, 9)
         lay.setSpacing(9)
@@ -96,6 +165,19 @@ class Toast(QFrame):
         self._timer.setSingleShot(True)
         self._timer.timeout.connect(self._fade_out)
         self.hide()
+
+    def set_glass_source(self, w):
+        self._glass_source = w
+        self.setAttribute(Qt.WA_StyledBackground, w is None)
+
+    def paintEvent(self, ev):
+        if self._glass_source is None:
+            return super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        Glass.paint(p, self, self._glass_source, radius=12)
+        p.end()
 
     def _on_anim_done(self):
         if self._hide_when_done:
@@ -255,6 +337,7 @@ class SelectionBar(QFrame):
     def __init__(self, parent):
         super().__init__(parent)
         self.setObjectName("SelBar")
+        self._glass_source = None
         lay = QHBoxLayout(self)
         lay.setContentsMargins(16, 8, 10, 8)
         lay.setSpacing(4)
@@ -271,6 +354,20 @@ class SelectionBar(QFrame):
         self._slide.setDuration(200)
         self._slide.setEasingCurve(QEasingCurve.OutCubic)
         self.hide()
+
+    def set_glass_source(self, w):
+        """The widget it floats over, whose content becomes the blurred backdrop."""
+        self._glass_source = w
+        self.setAttribute(Qt.WA_StyledBackground, w is None)
+
+    def paintEvent(self, ev):
+        if self._glass_source is None:
+            return super().paintEvent(ev)
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        Glass.paint(p, self, self._glass_source, radius=16)
+        p.end()
 
     def set_count(self, n, size_text=""):
         t = f"{n} selected"

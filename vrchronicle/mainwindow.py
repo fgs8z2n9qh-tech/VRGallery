@@ -167,6 +167,7 @@ class MainWindow(QMainWindow):
         self.lightbox = Lightbox(self)
         self.slideshow = Slideshow(cfg)
         self.toast_w = widgets.Toast(self)
+        self.toast_w.set_glass_source(self.stack)   # it floats over the page
 
         # ---------------- wiring ----------------
         self.bridge.index_progress.connect(self._on_index_progress)
