@@ -3,6 +3,9 @@
 A gallery that knows **which world** each photo was taken in and **who was there** —
 because it reads the same logs VRChat throws away.
 
+**[⬇ Download the installer](https://github.com/fgs8z2n9qh-tech/VRChronicle/releases/latest)**
+· Windows 10/11, no Python needed
+
 ## Where the knowledge comes from
 
 1. **VRCX metadata** — if VRCX runs with its screenshot helper, world + players are
