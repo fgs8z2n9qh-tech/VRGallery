@@ -159,6 +159,22 @@ def dark_titlebar(hwnd):
         pass
 
 
+def round_corners(hwnd, on=True):
+    """Ask DWM for rounded corners and a shadow.
+
+    A frameless window loses both by default; this puts them back, so a custom
+    title bar does not cost the window its Windows 11 shape.
+    """
+    try:
+        DWMWA_WINDOW_CORNER_PREFERENCE = 33
+        val = ctypes.c_int(2 if on else 1)      # 2 = round, 1 = do not round
+        ctypes.windll.dwmapi.DwmSetWindowAttribute(
+            int(hwnd), DWMWA_WINDOW_CORNER_PREFERENCE,
+            ctypes.byref(val), ctypes.sizeof(val))
+    except Exception:
+        pass
+
+
 def set_app_id(app_id="VRChronicle.Desktop"):
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)

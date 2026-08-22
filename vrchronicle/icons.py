@@ -69,6 +69,12 @@ _FEATHER = {
     "info": '<circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/>'
             '<line x1="12" y1="8" x2="12.01" y2="8"/>',
     "plus": '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>',
+    # window chrome: thin and square, the way every title bar draws them
+    "win-min": '<line x1="5" y1="12" x2="19" y2="12"/>',
+    "win-max": '<rect x="5" y="5" width="14" height="14" rx="1.5"/>',
+    "win-restore": '<rect x="4" y="8" width="12" height="12" rx="1.5"/>'
+                   '<path d="M8 8V5.5A1.5 1.5 0 0 1 9.5 4h9A1.5 1.5 0 0 1 20 5.5v9'
+                   'A1.5 1.5 0 0 1 18.5 16H16"/>',
     "check": '<polyline points="20 6 9 17 4 12"/>',
     "shuffle": '<polyline points="16 3 21 3 21 8"/><line x1="4" y1="20" x2="21" y2="3"/>'
                '<polyline points="21 16 21 21 16 21"/><line x1="15" y1="15" x2="21" y2="21"/>'

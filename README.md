@@ -14,6 +14,13 @@ because it reads the same logs VRChat throws away.
 > is a generated scene. Publishing who somebody actually plays with, or the photos
 > they are in, is exactly the thing this app warns you about.
 
+## The window
+
+Frameless, with the app's own title bar and window buttons, and the sidebar floating on
+it as a rounded panel. Dragging and edge-resizing are handed to Windows rather than done
+by hand, so Aero Snap, the snap-layout flyout and the rounded Windows 11 corners all
+still work.
+
 ## Browsing
 
 **Years → Months → Days.** Zoom out to find the stretch of time, then zoom in on it.

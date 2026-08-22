@@ -91,6 +91,77 @@ class Glass:
         return blurred is not None
 
 
+class TitleBar(QFrame):
+    """The window's own title bar, so the chrome matches the app.
+
+    Dragging hands off to the compositor with startSystemMove rather than
+    moving the window by hand: that is what keeps Aero Snap, the snap layouts
+    on the maximise button and the shake gestures working on a frameless
+    window.
+    """
+
+    HEIGHT = 36
+
+    def __init__(self, window):
+        super().__init__(window)
+        self.win = window
+        self.setObjectName("TitleBar")
+        self.setFixedHeight(self.HEIGHT)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(12, 0, 6, 0)
+        lay.setSpacing(2)
+        self.lab = QLabel("")
+        self.lab.setObjectName("TitleBarText")
+        lay.addWidget(self.lab)
+        lay.addStretch(1)
+        self.btn_min = self._chrome("win-min", "Minimise", window.showMinimized)
+        self.btn_max = self._chrome("win-max", "Maximise", self.toggle_max)
+        self.btn_close = self._chrome("x", "Close", window.close, danger=True)
+        for b in (self.btn_min, self.btn_max, self.btn_close):
+            lay.addWidget(b)
+
+    def _chrome(self, icon, tip, slot, danger=False):
+        b = QPushButton()
+        b.setObjectName("WinCloseBtn" if danger else "WinBtn")
+        b.setFixedSize(44, 30)
+        b.setToolTip(tip)
+        b.setFocusPolicy(Qt.NoFocus)
+        b.setCursor(Qt.ArrowCursor)
+        b.setIcon(icons.qicon(icon, style.PAL["dim"], 15))
+        b.setIconSize(QSize(15, 15))
+        b.clicked.connect(slot)
+        return b
+
+    def set_text(self, text):
+        self.lab.setText(text)
+
+    def toggle_max(self):
+        if self.win.isMaximized():
+            self.win.showNormal()
+        else:
+            self.win.showMaximized()
+        self.sync()
+
+    def sync(self):
+        maxed = self.win.isMaximized()
+        self.btn_max.setIcon(icons.qicon("win-restore" if maxed else "win-max",
+                                         style.PAL["dim"], 15))
+        self.btn_max.setToolTip("Restore" if maxed else "Maximise")
+
+    def mouseDoubleClickEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            self.toggle_max()
+
+    def mousePressEvent(self, ev):
+        if ev.button() == Qt.LeftButton:
+            handle = self.win.windowHandle()
+            if handle is not None:
+                handle.startSystemMove()
+                ev.accept()
+                return
+        super().mousePressEvent(ev)
+
+
 class FlowLayout(QLayout):
     def __init__(self, parent=None, margin=0, hspace=8, vspace=8):
         super().__init__(parent)

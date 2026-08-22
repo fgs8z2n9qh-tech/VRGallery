@@ -56,7 +56,13 @@ def _nav_icon(name):
     return ic
 
 
+NO_EDGE = Qt.Edges()      # built once: the empty flag is awkward to construct
+
+
 class MainWindow(QMainWindow):
+    EDGE = 8            # gap around the floating panels, and the resize border
+    NO_EDGE = NO_EDGE
+
     def __init__(self, app, cfg, db, auto_index=True):
         super().__init__()
         self.app = app
@@ -79,17 +85,31 @@ class MainWindow(QMainWindow):
         self._current_key = "all"
         self._drill_from = None
 
+        # Frameless, with the app's own title bar. Aero Snap, the snap-layout
+        # flyout and edge resizing all still work: the drag and the resize are
+        # handed to the compositor rather than done by hand.
+        self.setWindowFlag(Qt.FramelessWindowHint, True)
+        self.setAttribute(Qt.WA_Hover, True)
+
         root = QWidget()
         root.setObjectName("Root")
-        rl = QHBoxLayout(root)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(0)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setSpacing(0)
+        self.titlebar = widgets.TitleBar(self)
+        outer.addWidget(self.titlebar)
+        body = QWidget()
+        rl = QHBoxLayout(body)
+        rl.setContentsMargins(self.EDGE, 0, self.EDGE, self.EDGE)
+        rl.setSpacing(self.EDGE)
+        outer.addWidget(body, 1)
         self.setCentralWidget(root)
 
         # ---------------- sidebar ----------------
         side = QFrame()
         side.setObjectName("Sidebar")
         side.setFixedWidth(228)
+        side.setAttribute(Qt.WA_StyledBackground, True)
         sv = QVBoxLayout(side)
         sv.setContentsMargins(14, 16, 14, 14)
         sv.setSpacing(4)
@@ -1145,6 +1165,72 @@ class MainWindow(QMainWindow):
         self.toast(f"Accent: {style.ACCENTS[key]['label']}", "ok")
 
     # ---------------- window plumbing ----------------
+    # ---------------- frameless window: edges and state ----------------
+    def _edges_at(self, pos):
+        """Which border the pointer is on, for resizing a frameless window."""
+        if self.isMaximized() or self.isFullScreen():
+            return NO_EDGE
+        m, r = self.EDGE, self.rect()
+        edges = NO_EDGE
+        if pos.x() <= m:
+            edges |= Qt.LeftEdge
+        elif pos.x() >= r.width() - m:
+            edges |= Qt.RightEdge
+        if pos.y() <= m:
+            edges |= Qt.TopEdge
+        elif pos.y() >= r.height() - m:
+            edges |= Qt.BottomEdge
+        return edges
+
+    def _cursor_for(self, edges):
+        """Qt's edge flags are not ints -- int() on a combined one raises --
+        so they are compared as flags rather than used as dictionary keys."""
+        if not edges:
+            return None
+        for combo, cursor in ((Qt.LeftEdge | Qt.TopEdge, Qt.SizeFDiagCursor),
+                              (Qt.RightEdge | Qt.BottomEdge, Qt.SizeFDiagCursor),
+                              (Qt.RightEdge | Qt.TopEdge, Qt.SizeBDiagCursor),
+                              (Qt.LeftEdge | Qt.BottomEdge, Qt.SizeBDiagCursor)):
+            if edges == combo:
+                return cursor
+        if edges in (Qt.LeftEdge, Qt.RightEdge):
+            return Qt.SizeHorCursor
+        if edges in (Qt.TopEdge, Qt.BottomEdge):
+            return Qt.SizeVerCursor
+        return None
+
+    def mouseMoveEvent(self, ev):
+        cur = self._cursor_for(self._edges_at(ev.position().toPoint()))
+        if cur is None:
+            self.unsetCursor()
+        else:
+            self.setCursor(cur)
+        super().mouseMoveEvent(ev)
+
+    def leaveEvent(self, ev):
+        self.unsetCursor()
+        super().leaveEvent(ev)
+
+    def mousePressEvent(self, ev):
+        edges = self._edges_at(ev.position().toPoint())
+        handle = self.windowHandle()
+        if ev.button() == Qt.LeftButton and edges and handle is not None:
+            handle.startSystemResize(edges)     # the compositor does the drag
+            ev.accept()
+            return
+        super().mousePressEvent(ev)
+
+    def changeEvent(self, ev):
+        super().changeEvent(ev)
+        if ev.type() == ev.Type.WindowStateChange and hasattr(self, "titlebar"):
+            self.titlebar.sync()
+            # a maximised window has no border to grab, and its corners are square
+            body = self.centralWidget().layout().itemAt(1).widget()
+            gap = 0 if self.isMaximized() else self.EDGE
+            body.layout().setContentsMargins(gap, 0, gap, gap)
+            body.layout().setSpacing(self.EDGE)
+            winutil.round_corners(self.winId(), not self.isMaximized())
+
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         if self.lightbox.isVisible():

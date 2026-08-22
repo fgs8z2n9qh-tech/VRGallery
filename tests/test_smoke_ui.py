@@ -11,6 +11,8 @@ pytest.importorskip("PySide6")
 
 from PySide6.QtWidgets import QApplication
 
+from PySide6.QtCore import QPoint
+
 from vrchronicle import paths
 from vrchronicle.gridmodel import KIND_PHOTO as KIND_PHOTO_KIND
 
@@ -367,6 +369,47 @@ def test_the_floating_panels_render_their_glass(window, app):
     rail._bubble.render(target)
     assert not target.isNull()
     rail._hide_bubble()
+    window.hide()
+
+
+def test_the_window_wears_its_own_chrome(window, app):
+    """Frameless with a custom bar, and still a well-behaved window."""
+    from PySide6.QtCore import Qt
+    from PySide6.QtTest import QTest
+
+    assert window.windowFlags() & Qt.FramelessWindowHint
+    tb = window.titlebar
+    for b in (tb.btn_min, tb.btn_max, tb.btn_close):
+        assert b.isEnabled()
+
+    window.resize(1100, 700)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    app.processEvents()
+
+    # the edges must be grabbable for resizing, and the corners diagonal
+    w, h = window.width(), window.height()
+    assert window._edges_at(QPoint(2, h // 2)) == Qt.LeftEdge
+    assert window._edges_at(QPoint(w - 2, h // 2)) == Qt.RightEdge
+    assert window._edges_at(QPoint(2, 2)) == (Qt.LeftEdge | Qt.TopEdge)
+    assert not window._edges_at(QPoint(w // 2, h // 2))
+    assert window._cursor_for(Qt.LeftEdge | Qt.TopEdge) == Qt.SizeFDiagCursor
+    assert window._cursor_for(Qt.RightEdge) == Qt.SizeHorCursor
+    assert window._cursor_for(window.NO_EDGE) is None
+
+    # A frameless window that maximises to the FULL screen covers the taskbar.
+    tb.toggle_max()
+    app.processEvents()
+    assert window.isMaximized()
+    avail = window.screen().availableGeometry()
+    g = window.frameGeometry()
+    assert avail.contains(g), f"maximised past the work area: {g} vs {avail}"
+    # nothing to grab while maximised, and the panels sit flush
+    assert not window._edges_at(QPoint(2, 2))
+
+    tb.toggle_max()
+    app.processEvents()
+    assert not window.isMaximized()
     window.hide()
 
 

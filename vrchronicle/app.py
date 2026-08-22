@@ -111,6 +111,7 @@ def main(argv=None):
     else:
         win.show()
         winutil.dark_titlebar(win.winId())
+        winutil.round_corners(win.winId(), True)
 
     if args.shot:
         def snap():

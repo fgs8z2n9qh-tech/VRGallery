@@ -73,7 +73,18 @@ QWidget {{
     font-size: 13px;
 }}
 QMainWindow, #Root {{ background: {P['bg']}; }}
-#Sidebar {{ background: {P['sidebar']}; border-right: 1px solid {P['border']}; }}
+/* a floating panel rather than a wall: it sits on the window with a margin
+   and its own rounded edge, the way the rest of the app's surfaces do */
+#Sidebar {{
+    background: {P['sidebar']}; border: 1px solid {P['border']}; border-radius: 16px;
+}}
+#TitleBar {{ background: transparent; }}
+#TitleBarText {{ color: {P['faint']}; font-size: 12px; }}
+QPushButton#WinBtn, QPushButton#WinCloseBtn {{
+    background: transparent; border: none; border-radius: 8px;
+}}
+QPushButton#WinBtn:hover {{ background: {P['hover']}; }}
+QPushButton#WinCloseBtn:hover {{ background: {P['danger']}; }}
 #PageHeaderTitle {{ font-size: 21px; font-weight: 600; }}
 #PageHeaderSub {{ color: {P['dim']}; font-size: 12px; }}
 #SectionLabel {{
