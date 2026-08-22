@@ -230,7 +230,7 @@ class MainWindow(QMainWindow):
         for k, b in self._nav_buttons.items():
             b.setChecked(k == key)
         if key == "all":
-            self.page_grid.configure(PhotoFilter(), "Photos", back=False)
+            self.page_grid.configure(PhotoFilter(), "Photos", back=False, levels=True)
             self._show_page(self.page_grid)
         elif key == "favs":
             self.page_grid.configure(PhotoFilter(favorites=True), "Favorites", back=False)
@@ -756,7 +756,8 @@ class MainWindow(QMainWindow):
         gone = {os.path.normcase(os.path.abspath(p)) for p in removed}
         # only the files that actually disappeared are marked gone in the library
         self.db.mark_recycled([i.id for i in items
-                               if os.path.normcase(os.path.abspath(i.path)) in gone])
+                               if os.path.normcase(os.path.abspath(i.path)) in gone],
+                              datetime.now().isoformat(timespec="seconds"))
         n = len(removed)
         if err or n < len(items):
             self.toast(f"{n} of {len(items)} moved to the Recycle Bin"

@@ -120,9 +120,18 @@ QPushButton#IconBtn:hover {{ background: {P['hover']}; }}
 QPushButton#IconBtn:checked {{ background: {mix(A, 0.18)}; }}
 QPushButton#PillBtn {{
     background: {P['surface2']}; border: 1px solid {P['border']};
-    border-radius: 14px; padding: 5px 12px; color: {P['dim']}; font-size: 12px;
+    border-radius: 14px; padding: 5px 12px; color: {P['dim']};
+    /* the same weight checked and unchecked: a bolder label needs more room
+       than the button was measured for, and the text ends up clipped */
+    font-size: 12px; font-weight: 600;
 }}
 QPushButton#PillBtn:hover {{ background: {P['hover']}; color: {P['text']}; }}
+/* there was no :checked rule at all, so a segmented control never showed
+   which segment you were on */
+QPushButton#PillBtn:checked {{
+    background: {A}; border-color: {A}; color: #0b0e14;
+}}
+QPushButton#PillBtn:checked:hover {{ background: {mix(A, 0.85)}; color: #0b0e14; }}
 QPushButton#LinkBtn {{
     background: transparent; border: none; color: {A}; font-weight: 600; padding: 4px;
 }}

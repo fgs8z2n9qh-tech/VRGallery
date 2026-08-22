@@ -34,7 +34,8 @@ CREATE TABLE IF NOT EXISTS photos(
   instance_type TEXT,
   region TEXT,
   rating INTEGER DEFAULT 0,
-  is_video INTEGER DEFAULT 0
+  is_video INTEGER DEFAULT 0,
+  deleted_at TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_photos_taken ON photos(taken_at);
 CREATE INDEX IF NOT EXISTS idx_photos_day ON photos(day);
@@ -159,7 +160,8 @@ class Database:
         for col, decl in (("avatar_name", "TEXT"), ("session_id", "INTEGER"),
                           ("instance_type", "TEXT"), ("region", "TEXT"),
                           ("rating", "INTEGER DEFAULT 0"),
-                          ("is_video", "INTEGER DEFAULT 0")):
+                          ("is_video", "INTEGER DEFAULT 0"),
+                          ("deleted_at", "TEXT")):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {decl}")
         have_t = {r["name"] for r in self._conn.execute("PRAGMA table_info(photo_tags)")}
@@ -210,7 +212,8 @@ class Database:
                    ON CONFLICT(path) DO UPDATE SET
                      filesize=excluded.filesize, mtime=excluded.mtime,
                      taken_at=excluded.taken_at, day=excluded.day,
-                     is_video=excluded.is_video, missing=0""",
+                     is_video=excluded.is_video, missing=0,
+                     deleted_at=NULL""",
                 items)
             self._conn.commit()
 
@@ -519,10 +522,56 @@ class Database:
                 f"SELECT id FROM photos WHERE favorite=1 AND id IN ({q})", list(pids)).fetchall()
         return {r["id"] for r in rows}
 
-    def mark_recycled(self, pids):
+    def mark_recycled(self, pids, when=""):
+        """`deleted_at` is what separates "the app put this in the Recycle Bin"
+        from "the file simply is not there any more", which also sets missing."""
         with self._lock:
-            self._conn.executemany("UPDATE photos SET missing=1 WHERE id=?", [(p,) for p in pids])
+            self._conn.executemany(
+                "UPDATE photos SET missing=1, deleted_at=? WHERE id=?",
+                [(when, p) for p in pids])
             self._conn.commit()
+
+    def recently_deleted(self, limit=500):
+        with self._lock:
+            return self._conn.execute(
+                "SELECT id, path, taken_at, day, world_name, favorite, filesize, mtime, "
+                "deleted_at FROM photos "
+                "WHERE missing=1 AND deleted_at IS NOT NULL AND deleted_at != '' "
+                "ORDER BY deleted_at DESC, taken_at DESC LIMIT ?", (limit,)).fetchall()
+
+    def restore_photos(self, pids):
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE photos SET missing=0, deleted_at=NULL WHERE id=?",
+                [(p,) for p in pids])
+            self._conn.commit()
+
+    # ---------- periods (years / months) ----------
+
+    def period_summary(self, level, year=""):
+        """Year or month cards: [(key, count, bytes, cover_id)].
+
+        The cover is the best photo of the period -- a favourite, else the
+        highest rated, else the newest -- so a year is not represented by
+        whatever happened to be last.
+        """
+        span = 4 if level == "year" else 7
+        where = ["missing=0", "day IS NOT NULL", "is_video=0"]
+        params = []
+        if year:
+            where.append("substr(day,1,4)=?")
+            params.append(str(year))
+        w = " AND ".join(where)
+        with self._lock:
+            return self._conn.execute(
+                f"""SELECT substr(day,1,{span}) k, COUNT(*) c, COALESCE(SUM(filesize),0) b,
+                        (SELECT p2.id FROM photos p2
+                          WHERE p2.missing=0 AND p2.is_video=0
+                            AND substr(p2.day,1,{span})=substr(p.day,1,{span})
+                          ORDER BY p2.favorite DESC, p2.rating DESC, p2.taken_at DESC
+                          LIMIT 1) cover_id
+                   FROM photos p WHERE {w}
+                   GROUP BY k ORDER BY k DESC""", params).fetchall()
 
     # ---------- in-frame tags ----------
 

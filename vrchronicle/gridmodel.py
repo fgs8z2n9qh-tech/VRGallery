@@ -15,6 +15,7 @@ ItemRole = Qt.UserRole + 2
 
 KIND_HEADER = 0
 KIND_PHOTO = 1
+KIND_PERIOD = 2       # a year or month card at the zoomed-out browsing levels
 
 
 class PhotoItem:
@@ -160,6 +161,23 @@ class GridModel(QAbstractListModel):
                 self._rows.append((KIND_PHOTO, item))
         self.endResetModel()
 
+    def set_periods(self, rows, level, covers):
+        """Year or month cards. rows: db.period_summary; covers: id -> photo row."""
+        self.beginResetModel()
+        self._rows = []
+        self._by_id = {}
+        self._photos = []
+        for r in rows:
+            key = r["k"]
+            label = key if level == "year" else fmt.month_label(key)
+            c = covers.get(r["cover_id"])
+            cover = (MiniItem(c["id"], c["path"], c["mtime"], c["filesize"], 1)
+                     if c else None)
+            self._rows.append((KIND_PERIOD, {
+                "key": key, "level": level, "label": label, "count": r["c"],
+                "bytes": r["b"], "cover": cover}))
+        self.endResetModel()
+
     # ---- access ----
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._rows)
@@ -261,11 +279,20 @@ class PhotoDelegate(QStyledItemDelegate):
     def cell_size(self):
         return QSize(self.cell_w, int(self.cell_w * 9 / 16))
 
+    def period_size(self):
+        """Zoomed-out cards are big: at these levels the cover IS the content."""
+        vw = max(320, self.view.viewport().width() - 24)
+        per_row = max(1, min(4, vw // 340))
+        w = int((vw - (per_row - 1) * 14) / per_row)
+        return QSize(w, int(w * 2 / 3))
+
     def sizeHint(self, option, index):
         kind = index.data(KindRole)
         if kind == KIND_HEADER:
             vw = self.view.viewport().width()
             return QSize(max(80, vw - 24), 46)
+        if kind == KIND_PERIOD:
+            return self.period_size()
         return self.cell_size()
 
     # --- painting ---
@@ -276,6 +303,8 @@ class PhotoDelegate(QStyledItemDelegate):
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
         if kind == KIND_HEADER:
             self._paint_header(painter, option, index)
+        elif kind == KIND_PERIOD:
+            self._paint_period(painter, option, index)
         else:
             self._paint_photo(painter, option, index)
         painter.restore()
@@ -294,6 +323,53 @@ class PhotoDelegate(QStyledItemDelegate):
         p.setFont(f2)
         p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom,
                    f"{count} {fmt.plural(count, 'photo')}")
+
+    def _paint_period(self, p, option, index):
+        """A big cover with the period written across the bottom of it."""
+        d = index.data(ItemRole)
+        r = QRectF(option.rect)
+        hovered = bool(option.state & QStyle.State_MouseOver)
+        path = QPainterPath()
+        path.addRoundedRect(r, 16, 16)
+        p.save()
+        p.setClipPath(path)
+        pm = self.cache.get(d["cover"]) if d["cover"] is not None else None
+        if pm and not pm.isNull():
+            pw, ph = pm.width(), pm.height()
+            grow = 1.04 if hovered else 1.0
+            scale = max(r.width() / pw, r.height() / ph) * grow
+            dw, dh = pw * scale, ph * scale
+            p.drawPixmap(QRectF(r.x() + (r.width() - dw) / 2,
+                                r.y() + (r.height() - dh) / 2, dw, dh),
+                         pm, QRectF(0, 0, pw, ph))
+        else:
+            p.fillRect(r, QColor(style.PAL["surface2"]))
+        # a scrim, so the label is readable over a bright sky as well as a night
+        scrim = QLinearGradient(r.left(), r.bottom() - r.height() * 0.55,
+                                r.left(), r.bottom())
+        scrim.setColorAt(0.0, QColor(0, 0, 0, 0))
+        scrim.setColorAt(1.0, QColor(0, 0, 0, 205))
+        p.fillRect(QRectF(r.left(), r.bottom() - r.height() * 0.55,
+                          r.width(), r.height() * 0.55), scrim)
+        p.restore()
+
+        f = QFont()
+        f.setPointSizeF(19 if d["level"] == "year" else 15)
+        f.setWeight(QFont.Bold)
+        p.setFont(f)
+        p.setPen(QColor(255, 255, 255))
+        text_r = r.adjusted(18, 0, -18, -14)
+        p.drawText(text_r, Qt.AlignLeft | Qt.AlignBottom, d["label"])
+        f2 = QFont()
+        f2.setPointSizeF(10)
+        p.setFont(f2)
+        p.setPen(QColor(255, 255, 255, 190))
+        sub = f"{fmt.count_label(d['count'])} {fmt.plural(d['count'], 'photo')}"
+        p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom, sub)
+        if hovered:
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 120), 2))
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 16, 16)
 
     def _paint_photo(self, p, option, index):
         item = index.data(ItemRole)
@@ -436,9 +512,15 @@ class GridView(QListView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QListView.NoFrame)
         self.doubleClicked.connect(self._maybe_open)
+        # a period card is a place to go, not a thing to select: one click
+        self.clicked.connect(self._maybe_drill)
 
     def _maybe_open(self, ix):
         if ix.data(KindRole) == KIND_PHOTO:
+            self.open_requested.emit(ix)
+
+    def _maybe_drill(self, ix):
+        if ix.data(KindRole) == KIND_PERIOD:
             self.open_requested.emit(ix)
 
     def resizeEvent(self, ev):

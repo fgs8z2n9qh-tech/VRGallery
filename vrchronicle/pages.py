@@ -1316,7 +1316,8 @@ class CheckGridView(QListView):
 
 class CleanupPage(QWidget):
     MODES = [("black", "Black shots"), ("burst", "Bursts"),
-             ("dupes", "Duplicates"), ("large", "Huge files")]
+             ("dupes", "Duplicates"), ("large", "Huge files"),
+             ("deleted", "Recently deleted")]
     DUPE_DISTANCE = 3          # max differing bits of the 64-bit dhash
     DUPE_LUMA_DELTA = 7.0      # …and the frames must be about equally bright
 
@@ -1342,6 +1343,7 @@ class CleanupPage(QWidget):
             b.setCheckable(True)
             b.setCursor(Qt.PointingHandCursor)
             b.setProperty("mode", key)
+            b.setMinimumWidth(b.sizeHint().width())   # never squeezed to ellipsis
             self.seg_group.addButton(b)
             head.addWidget(b)
             if key == self.mode:
@@ -1392,10 +1394,16 @@ class CleanupPage(QWidget):
         self.btn_convert.clicked.connect(self._convert)
         self.btn_del = widgets.ghost_btn("Recycle selected", "trash", danger=True)
         self.btn_del.clicked.connect(self._recycle_checked)
+        self.btn_restore = widgets.ghost_btn("Restore selected", "refresh", primary=True)
+        self.btn_restore.clicked.connect(self._restore_checked)
+        self.btn_bin = widgets.ghost_btn("Open Recycle Bin", "external")
+        self.btn_bin.clicked.connect(lambda: winutil.open_recycle_bin())
         bottom.addWidget(self.btn_smart)
         bottom.addWidget(self.btn_all)
         bottom.addWidget(self.btn_none)
         bottom.addWidget(self.btn_convert)
+        bottom.addWidget(self.btn_bin)
+        bottom.addWidget(self.btn_restore)
         bottom.addWidget(self.btn_del)
         root.addLayout(bottom)
 
@@ -1462,9 +1470,21 @@ class CleanupPage(QWidget):
                             and d["path"].lower().endswith(".png"))
                 rows.insert(0, ("H", f"Largest files · converting to JPG saves roughly "
                                      f"60–75% ({png_n} PNGs listed)"))
+        elif self.mode == "deleted":
+            data = self.main.db.recently_deleted()
+            for r in data:
+                when = fmt.date_short(r["deleted_at"]) if r["deleted_at"] else ""
+                rows.append(("P", self._mk(r, label=when)))
+            if rows:
+                rows.insert(0, ("H", "Photos this app moved to the Recycle Bin · "
+                                     "restore puts them back where they were"))
         grouped = self.mode in ("burst", "dupes")
+        deleted = self.mode == "deleted"
         self.model.set_rows(rows)
         self.btn_convert.setVisible(self.mode == "large")
+        self.btn_restore.setVisible(deleted)
+        self.btn_bin.setVisible(deleted)
+        self.btn_del.setVisible(not deleted)       # they are already deleted
         self.btn_smart.setVisible(grouped)
         self.btn_smart.setToolTip("Keeps the first shot of every group"
                                   if self.mode == "burst" else
@@ -1473,10 +1493,11 @@ class CleanupPage(QWidget):
         n = sum(1 for k, _d in rows if k == "P")
         self.empty.setVisible(n == 0)
         self.empty.resize(self.view.size())
-        subs = {"black": "black shot", "burst": "burst shot",
-                "dupes": "duplicate", "large": "huge file"}
-        self.lab_sub.setText(f"{n} {fmt.plural(n, subs.get(self.mode, 'item'))} · "
-                             "deletes always go to the Recycle Bin")
+        subs = {"black": "black shot", "burst": "burst shot", "dupes": "duplicate",
+                "large": "huge file", "deleted": "deleted photo"}
+        # the header row also carries five mode pills, so the subtitle stays short
+        tail = "" if deleted else " · deletes always go to the Recycle Bin"
+        self.lab_sub.setText(f"{n} {fmt.plural(n, subs.get(self.mode, 'item'))}{tail}")
         self._update_bottom()
 
     def _duplicate_groups(self):
@@ -1568,7 +1589,29 @@ class CleanupPage(QWidget):
         self.lab_pick.setText(f"{len(ch)} selected · {fmt.human_size(total)}")
         self.btn_del.setEnabled(bool(ch))
         self.btn_convert.setEnabled(bool(ch))
+        self.btn_restore.setEnabled(bool(ch))
         self.view.viewport().update()
+
+    def _restore_checked(self):
+        ch = self.model.checked()
+        if not ch:
+            return
+        restored, missing = winutil.restore_from_recycle_bin([d["path"] for d in ch])
+        back = {os.path.normcase(os.path.abspath(p)) for p in restored}
+        done = [d for d in ch if os.path.normcase(os.path.abspath(d["path"])) in back]
+        if done:
+            self.main.db.restore_photos([d["id"] for d in done])
+            self.main.after_photos_changed()
+        self.refresh()
+        if not done:
+            self.main.toast("Nothing came back — the Recycle Bin no longer has "
+                            "those files, or Windows would not restore them.", "err")
+        elif missing:
+            self.main.toast(f"Restored {len(done)}; {len(missing)} were no longer "
+                            "in the Recycle Bin.", "err")
+        else:
+            self.main.toast(f"Restored {len(done)} "
+                            f"{fmt.plural(len(done), 'photo')}.", "ok")
 
     def _recycle_checked(self):
         ch = self.model.checked()
@@ -1583,7 +1626,8 @@ class CleanupPage(QWidget):
         removed, err = winutil.recycle([d["path"] for d in ch])
         gone = {os.path.normcase(os.path.abspath(p)) for p in removed}
         done = [d for d in ch if os.path.normcase(os.path.abspath(d["path"])) in gone]
-        self.main.db.mark_recycled([d["id"] for d in done])
+        self.main.db.mark_recycled([d["id"] for d in done],
+                                   datetime.now().isoformat(timespec="seconds"))
         freed = sum(d["filesize"] or 0 for d in done)
         if err or len(done) < len(ch):
             self.main.toast(f"{len(done)} of {len(ch)} recycled"

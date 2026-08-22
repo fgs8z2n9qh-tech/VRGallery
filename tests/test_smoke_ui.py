@@ -64,7 +64,7 @@ def test_person_profile_opens_for_an_unknown_name(window):
 
 
 def test_cleanup_modes_all_render(window):
-    for mode in ("black", "burst", "dupes", "large"):
+    for mode in ("black", "burst", "dupes", "large", "deleted"):
         window.page_cleanup.mode = mode
         window.page_cleanup.refresh()
 
@@ -186,6 +186,61 @@ def test_the_timeline_rail_lands_on_the_month_it_shows(window, app):
         assert day[:7] == ym, f"the rail says {ym} but that point shows {day[:7]}"
         checked += 1
     assert checked >= 20, "too few marks were actually verifiable"
+
+
+def test_browsing_zooms_from_years_to_months_to_days(window, app):
+    from vrchronicle.gridmodel import KIND_PERIOD, ItemRole, KindRole
+
+    rows = []
+    for year in (2024, 2025):
+        for month in (3, 7):
+            for n in range(4):
+                day = f"{year}-{month:02d}-0{n + 1}"
+                rows.append({"path": f"/x/{year}{month}{n}.png", "folder": "/x",
+                             "filename": f"VRChat_{day}_10-00-0{n}.000.png",
+                             "taken_at": f"{day}T10:00:0{n}", "day": day,
+                             "filesize": 10, "mtime": 1.0})
+    window.db.upsert_photos(rows)
+    window.activate("all")
+    page = window.page_grid
+    assert not page.levels.isHidden(), "the level control belongs on Photos"
+
+    page.set_level("year")
+    kinds = [page.model.index(r, 0).data(KindRole) for r in range(page.model.rowCount())]
+    assert kinds and set(kinds) == {KIND_PERIOD}
+    years = [page.model.index(r, 0).data(ItemRole)["label"]
+             for r in range(page.model.rowCount())]
+    assert years == ["2026", "2025", "2024"]      # newest first, incl. the fixture photo
+    # the photo-only controls step aside at this level
+    assert page.slider.isHidden() and page.sort_box.isHidden()
+
+    page._open_from_index(page.model.index(2, 0))     # click 2024
+    assert page.level == "month" and page._level_year == "2024"
+    months = [page.model.index(r, 0).data(ItemRole)["key"]
+              for r in range(page.model.rowCount())]
+    assert months == ["2024-07", "2024-03"]
+
+    page._open_from_index(page.model.index(1, 0))     # click March 2024
+    assert page.level == "day"
+    assert page.filter.date_from == "2024-03-01"
+    assert page.filter.date_to == "2024-03-31"
+    assert len(page.model.photos()) == 4
+    assert not page.slider.isHidden(), "the photo controls come back at Days"
+
+    page._level_clicked("day")                        # asking for Days means all days
+    assert page.filter.date_from == "" and page.filter.date_to == ""
+    assert len(page.model.photos()) == len(rows) + 1
+
+
+def test_a_drill_page_has_no_level_control(window):
+    """Years/Months only make sense for the whole library, not for one world."""
+    window.activate("all")
+    assert not window.page_grid.levels.isHidden()
+    window.push_person("Nobody At All")
+    window.activate("all")
+    window.page_grid.configure(window.page_grid.filter, "Someone", back=True)
+    assert window.page_grid.levels.isHidden()
+    assert window.page_grid.level == "day"
 
 
 def test_filters_apply_without_error(window):

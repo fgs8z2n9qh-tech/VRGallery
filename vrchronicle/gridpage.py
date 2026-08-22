@@ -1,13 +1,14 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
 from PySide6.QtCore import QDate, QPoint, QRectF, QSize, Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
-from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QFrame,
-                               QHBoxLayout, QLabel, QLineEdit, QSlider, QVBoxLayout,
-                               QWidget)
+from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
+                               QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
+                               QSlider, QVBoxLayout, QWidget)
 
 from . import fmt, icons, style, vrclog, widgets
 from .db import PhotoFilter
-from .gridmodel import GridModel, GridView, PhotoDelegate, KIND_PHOTO, ItemRole, KindRole
+from .gridmodel import (GridModel, GridView, PhotoDelegate, KIND_PERIOD,
+                        KIND_PHOTO, ItemRole, KindRole)
 
 
 class _RailBubble(QWidget):
@@ -202,6 +203,9 @@ class GridPage(QWidget):
         self.filter = PhotoFilter()
         self.title_text = "Photos"
         self._rows = []
+        self.level = "day"          # 'year' | 'month' | 'day'
+        self._level_year = ""       # which year the Months level is showing
+        self._levels_on = False     # only the Photos page browses by period
 
         root = QVBoxLayout(self)
         root.setContentsMargins(24, 18, 24, 0)
@@ -223,6 +227,28 @@ class GridPage(QWidget):
         tcol.addWidget(self.lab_title)
         tcol.addWidget(self.lab_sub)
         head.addLayout(tcol)
+        head.addSpacing(18)
+
+        # Years / Months / Days, the way a photo library is normally browsed:
+        # zoom out to find the stretch of time, then zoom in on it.
+        self.levels = QWidget()
+        lv = QHBoxLayout(self.levels)
+        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setSpacing(6)
+        self.level_group = QButtonGroup(self)
+        self.level_group.setExclusive(True)
+        for key, label in (("year", "Years"), ("month", "Months"), ("day", "Days")):
+            b = QPushButton(label)
+            b.setObjectName("PillBtn")
+            b.setCheckable(True)
+            b.setCursor(Qt.PointingHandCursor)
+            b.setProperty("level", key)
+            b.setChecked(key == "day")
+            self.level_group.addButton(b)
+            lv.addWidget(b)
+        self.level_group.buttonClicked.connect(
+            lambda b: self._level_clicked(b.property("level")))
+        head.addWidget(self.levels)
         head.addStretch(1)
 
         self.search = QLineEdit()
@@ -386,11 +412,16 @@ class GridPage(QWidget):
         self._apply_filters()
 
     # ------- state -------
-    def configure(self, f: PhotoFilter, title, back=False):
+    def configure(self, f: PhotoFilter, title, back=False, levels=False):
         self.filter = f
         self.title_text = title
         self.lab_title.setText(title)
         self.btn_back.setVisible(back)
+        self._levels_on = levels
+        self.levels.setVisible(levels)
+        if not levels:
+            self.level = "day"
+            self._level_year = ""
         blocked = self.search.blockSignals(True)
         self.search.setText(f.text)
         self.search.blockSignals(blocked)
@@ -416,7 +447,56 @@ class GridPage(QWidget):
             ix = cb.findData(val)
             cb.setCurrentIndex(ix if ix >= 0 else 0)
 
+    def _level_clicked(self, level):
+        """Picking a level from the control, rather than drilling into a card."""
+        if level == "day":
+            # a month card narrows the dates; asking for Days means all of them
+            self.filter.date_from = self.filter.date_to = ""
+            self._sync_filter_bar(self.filter)
+        elif level == "year":
+            self._level_year = ""
+        self.set_level(level, self._level_year if level == "month" else "")
+
+    def set_level(self, level, year=""):
+        """Zoom the library: 'year' -> 'month' -> 'day'."""
+        self.level = level
+        if level != "month" or year:
+            self._level_year = year
+        for b in self.level_group.buttons():
+            b.setChecked(b.property("level") == level)
+        self.refresh()
+        self.view.verticalScrollBar().setValue(0)
+
+    def _period_widgets_visible(self, periods):
+        """Sorting, thumbnail size, filters and the rail are about photos."""
+        for w in (self.sort_box, self.slider, self.btn_filter, self.btn_fav, self.btn_play):
+            w.setVisible(not periods)
+        if periods:
+            self.btn_filter.setChecked(False)
+        self.rail.setVisible(not periods and self.rail_has_marks())
+
+    def rail_has_marks(self):
+        return len(getattr(self.rail, "_marks", [])) > 1
+
     def refresh(self):
+        periods = self._levels_on and self.level in ("year", "month")
+        self._period_widgets_visible(periods)
+        if periods:
+            rows = self.db.period_summary(self.level, self._level_year)
+            covers = self.db.photos_by_ids([r["cover_id"] for r in rows])
+            self.model.set_periods(rows, self.level, covers)
+            n = sum(r["c"] for r in rows)
+            total = sum(r["b"] or 0 for r in rows)
+            what = "year" if self.level == "year" else "month"
+            head = f"{len(rows)} {fmt.plural(len(rows), what)}"
+            if self._level_year:
+                head = f"{self._level_year} · {head}"
+            self.lab_sub.setText(
+                f"{head} · {fmt.count_label(n)} {fmt.plural(n, 'photo')} · "
+                f"{fmt.human_size(total)}" if rows else "No photos to show")
+            self.empty.setVisible(not rows)
+            self._position_overlays()
+            return
         self.filter.sort_desc = self.sort_box.currentIndex() == 0
         self._rows = self.db.query_photos(self.filter)
         self.model.set_photos(self._rows, group_by_day=True)
@@ -509,9 +589,25 @@ class GridPage(QWidget):
             self.selbar.hide()
 
     def _open_from_index(self, ix):
+        if ix.data(KindRole) == KIND_PERIOD:
+            d = ix.data(ItemRole)
+            if d["level"] == "year":
+                self.set_level("month", d["key"])
+            else:
+                self.show_month(d["key"])
+            return
         pos = self.model.photo_pos(ix.row())
         if pos >= 0:
             self.main.open_lightbox(self, self.model.photos(), pos)
+
+    def show_month(self, ym):
+        """Drill from a month card into that month's days."""
+        year, month = int(ym[:4]), int(ym[5:7])
+        last = QDate(year, month, 1).daysInMonth()
+        self.filter.date_from = f"{ym}-01"
+        self.filter.date_to = f"{ym}-{last:02d}"
+        self._sync_filter_bar(self.filter)
+        self.set_level("day")
 
     def _fav_selection(self):
         items = self._selected_items()

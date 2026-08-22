@@ -218,6 +218,66 @@ def test_the_contact_sheet_query_returns_what_its_caller_reads(tmp_path):
     db.close()
 
 
+def test_recently_deleted_only_lists_what_this_app_recycled(tmp_path):
+    db = Database(str(tmp_path / "d.db"))
+    db.upsert_photos([_photo("a.png", "2026-01-01"), _photo("gone.png", "2026-01-02")])
+    ids = {r["path"]: r["id"] for r in db.query_photos(PhotoFilter())}
+
+    # a file that simply vanished from disk is missing, but nobody deleted it
+    db._conn.execute("UPDATE photos SET missing=1 WHERE path='gone.png'")
+    db._conn.commit()
+    assert db.recently_deleted() == []
+
+    db.mark_recycled([ids["a.png"]], "2026-08-22T04:00:00")
+    listed = db.recently_deleted()
+    assert [r["path"] for r in listed] == ["a.png"]
+    assert listed[0]["deleted_at"] == "2026-08-22T04:00:00"
+    assert db.query_photos(PhotoFilter()) == []          # and out of the library
+
+    db.restore_photos([ids["a.png"]])
+    assert db.recently_deleted() == []
+    assert [r["path"] for r in db.query_photos(PhotoFilter())] == ["a.png"]
+    db.close()
+
+
+def test_reindexing_a_returned_file_clears_the_deleted_stamp(tmp_path):
+    """Restoring by hand in Explorer must not leave it in Recently deleted."""
+    db = Database(str(tmp_path / "d.db"))
+    db.upsert_photos([_photo("a.png", "2026-01-01")])
+    pid = db.query_photos(PhotoFilter())[0]["id"]
+    db.mark_recycled([pid], "2026-08-22T04:00:00")
+    assert len(db.recently_deleted()) == 1
+    db.upsert_photos([_photo("a.png", "2026-01-01")])    # the indexer finds it again
+    assert db.recently_deleted() == []
+    db.close()
+
+
+def test_period_cards_cover_years_and_months(tmp_path):
+    db = Database(str(tmp_path / "p.db"))
+    db.upsert_photos([
+        _photo("a.png", "2025-06-01"), _photo("b.png", "2026-01-02"),
+        _photo("c.png", "2026-01-09"), _photo("d.png", "2026-03-04"),
+        _photo("clip.mp4", "2026-03-05", is_video=1),
+    ])
+    years = {r["k"]: r["c"] for r in db.period_summary("year")}
+    assert years == {"2026": 3, "2025": 1}               # the recording is not a photo
+    months = [r["k"] for r in db.period_summary("month", "2026")]
+    assert months == ["2026-03", "2026-01"]              # newest first
+    for r in db.period_summary("year"):
+        assert r["cover_id"], "every period needs a cover"
+    db.close()
+
+
+def test_a_favourite_becomes_the_cover_of_its_period(tmp_path):
+    db = Database(str(tmp_path / "p.db"))
+    db.upsert_photos([_photo("old.png", "2026-01-01"), _photo("new.png", "2026-06-01")])
+    by = {r["path"]: r["id"] for r in db.query_photos(PhotoFilter())}
+    assert db.period_summary("year")[0]["cover_id"] == by["new.png"]   # newest by default
+    db.set_favorite([by["old.png"]], True)
+    assert db.period_summary("year")[0]["cover_id"] == by["old.png"]
+    db.close()
+
+
 def test_recordings_stay_out_of_cleanup_and_off_card_covers(tmp_path):
     db = Database(str(tmp_path / "v.db"))
     db.upsert_photos([

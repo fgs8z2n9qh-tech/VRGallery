@@ -130,6 +130,9 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key in ("years", "months"):        # the zoomed-out browsing levels
+                win.activate("all")
+                win.page_grid.set_level("year" if key == "years" else "month")
             elif key == "rail":                     # the timeline rail, mid-drag
                 rail = win.page_grid.rail
                 rail._show_bubble(rail.height() * 0.45)

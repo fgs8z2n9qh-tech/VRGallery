@@ -59,6 +59,95 @@ def recycle(paths_list):
     return removed, ""
 
 
+# Restoring from the Recycle Bin is only possible through a shell verb, and the
+# verb's name is localized. There is no pywin32 or comtypes here (the app is
+# deliberately dependency-light), so the shell is driven through PowerShell,
+# which is always present on Windows.
+_RESTORE_PS = r"""
+param([string]$ListFile)
+$ErrorActionPreference = 'SilentlyContinue'
+$names = @('undelete','restore','visszaallitas','visszaállítás','wiederherstellen',
+           'restaurer','ripristina','restaurar','herstellen','przywroc','przywróć',
+           'obnovit','aterstall','återställ','gendan','palauta','geri yukle','geri yükle')
+$targets = @{}
+foreach ($line in [System.IO.File]::ReadAllLines($ListFile, [System.Text.Encoding]::UTF8)) {
+  if ($line) { $targets[$line.ToLowerInvariant()] = $true }
+}
+$shell = New-Object -ComObject Shell.Application
+$bin = $shell.Namespace(10)
+if ($bin -eq $null) { exit 0 }
+foreach ($item in @($bin.Items())) {
+  $folder = $bin.GetDetailsOf($item, 1)
+  if (-not $folder) { continue }
+  $full = Join-Path $folder $item.Name
+  if (-not $targets.ContainsKey($full.ToLowerInvariant())) { continue }
+  $done = $false
+  foreach ($v in @($item.Verbs())) {
+    $n = ($v.Name -replace '&','').Trim().ToLowerInvariant()
+    if ($names -contains $n) { $v.DoIt(); $done = $true; break }
+  }
+  if (-not $done) { $item.InvokeVerb('undelete') }
+}
+"""
+
+
+def restore_from_recycle_bin(paths_list):
+    """Put files back where they came from. -> (restored_paths, still_missing).
+
+    Nothing is deleted and nothing is overwritten. Whether a file came back is
+    decided by looking at the disk afterwards, never by the shell's word for it.
+    """
+    wanted = [p for p in paths_list if p]
+    already = [p for p in wanted if os.path.exists(p)]
+    todo = [p for p in wanted if not os.path.exists(p)]
+    if not todo:
+        return already, []
+
+    import subprocess
+    import tempfile
+    root = os.environ.get("SystemRoot", r"C:\Windows")
+    ps = os.path.join(root, "System32", "WindowsPowerShell", "v1.0", "powershell.exe")
+    if not os.path.exists(ps):
+        return already, todo
+
+    tmpdir = tempfile.mkdtemp(prefix="vrchronicle-restore-")
+    list_path = os.path.join(tmpdir, "targets.txt")
+    script_path = os.path.join(tmpdir, "restore.ps1")
+    try:
+        with open(list_path, "w", encoding="utf-8") as f:
+            f.write(chr(10).join(os.path.abspath(p) for p in todo))
+        with open(script_path, "w", encoding="utf-8") as f:
+            f.write(_RESTORE_PS)
+        subprocess.run([ps, "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
+                        "-File", script_path, "-ListFile", list_path],
+                       capture_output=True, timeout=90,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except Exception:
+        pass
+    finally:
+        for f in (list_path, script_path):
+            try:
+                os.remove(f)
+            except OSError:
+                pass
+        try:
+            os.rmdir(tmpdir)
+        except OSError:
+            pass
+
+    restored = already + [p for p in todo if os.path.exists(p)]
+    return restored, [p for p in todo if not os.path.exists(p)]
+
+
+def open_recycle_bin():
+    """Last resort when the shell will not restore: let them do it by hand."""
+    try:
+        os.startfile("shell:RecycleBinFolder")
+        return True
+    except Exception:
+        return False
+
+
 def dark_titlebar(hwnd):
     try:
         DWMWA_USE_IMMERSIVE_DARK_MODE = 20
