@@ -200,6 +200,24 @@ class GridModel(QAbstractListModel):
             return Qt.ItemIsEnabled
         return Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
+    def day_of_row(self, row):
+        """(day, count, header_row) for whatever is at this row, or None."""
+        if not (0 <= row < len(self._rows)):
+            return None
+        kind, payload = self._rows[row]
+        if kind == KIND_PERIOD:
+            return None
+        day = payload[0] if kind == KIND_HEADER else payload.day
+        if not day:
+            return None
+        head = row
+        while head >= 0:
+            k, pl = self._rows[head]
+            if k == KIND_HEADER and pl[0] == day:
+                return day, pl[1], head
+            head -= 1
+        return day, 0, -1
+
     def photos(self):
         return self._photos
 
@@ -496,6 +514,7 @@ class GridView(QListView):
     fav_key = Signal()
     delete_key = Signal()
     context_requested = Signal(object, QModelIndex)   # QPoint, index
+    zoom_requested = Signal(int)                      # ctrl+wheel notches
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -522,6 +541,16 @@ class GridView(QListView):
     def _maybe_drill(self, ix):
         if ix.data(KindRole) == KIND_PERIOD:
             self.open_requested.emit(ix)
+
+    def wheelEvent(self, ev):
+        # ctrl+wheel resizes the thumbnails, the way every photo grid does
+        if ev.modifiers() & Qt.ControlModifier:
+            notches = ev.angleDelta().y()
+            if notches:
+                self.zoom_requested.emit(1 if notches > 0 else -1)
+            ev.accept()
+            return
+        super().wheelEvent(ev)
 
     def resizeEvent(self, ev):
         super().resizeEvent(ev)

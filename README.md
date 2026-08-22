@@ -14,6 +14,19 @@ because it reads the same logs VRChat throws away.
 > is a generated scene. Publishing who somebody actually plays with, or the photos
 > they are in, is exactly the thing this app warns you about.
 
+## Browsing
+
+**Years → Months → Days.** Zoom out to find the stretch of time, then zoom in on it.
+Each year and month is a card showing the best photo of that period — a favourite,
+else the highest rated, else the newest.
+
+![Browsing by year](docs/11-years.png)
+
+At the Days level the day you are inside stays pinned to the top while you scroll,
+**Ctrl+wheel** resizes the thumbnails without losing your place, and the rail down the
+right edge jumps through the years — point at it and it names the month you would
+land on.
+
 ## First run
 
 It says what it is going to read, from where, before it reads any of it.

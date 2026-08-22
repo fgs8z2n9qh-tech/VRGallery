@@ -1,5 +1,6 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import QDate, QPoint, QRectF, QSize, Qt, QTimer, Signal
+from PySide6.QtCore import (QDate, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
+                            Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
                                QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -192,6 +193,52 @@ class TimelineRail(QWidget):
         self.update()
 
 
+class StickyDay(QWidget):
+    """The day you are inside, pinned to the top of the grid while you scroll.
+
+    Painted rather than styled so it matches the day headers in the grid
+    exactly -- same font, same two-column layout.
+    """
+
+    HEIGHT = 38
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self._day = ""
+        self._count = 0
+        self.hide()
+
+    def set_day(self, day, count):
+        if (day, count) != (self._day, self._count):
+            self._day, self._count = day, count
+            self.update()
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = QRectF(self.rect())
+        p.fillRect(r, QColor(style.PAL["bg"]))
+        p.setPen(QColor(style.PAL["border"]))
+        p.drawLine(QPointF(r.left(), r.bottom() - 0.5),
+                   QPointF(r.right(), r.bottom() - 0.5))
+        f = QFont()
+        f.setPointSizeF(10.5)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        text_r = r.adjusted(4, 0, -4, -8)
+        p.setPen(QColor(style.PAL["text"]))
+        p.drawText(text_r, Qt.AlignLeft | Qt.AlignBottom, fmt.day_label(self._day))
+        f2 = QFont(f)
+        f2.setWeight(QFont.Normal)
+        f2.setPointSizeF(9.5)
+        p.setFont(f2)
+        p.setPen(QColor(style.PAL["faint"]))
+        p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom,
+                   f"{self._count} {fmt.plural(self._count, 'photo')}")
+        p.end()
+
+
 class GridPage(QWidget):
     back_requested = Signal()
 
@@ -319,11 +366,13 @@ class GridPage(QWidget):
         self.view.delete_key.connect(self._delete_selection)
         self.view.context_requested.connect(self._context_menu)
         self.view.selectionModel().selectionChanged.connect(self._sel_changed)
+        self.view.zoom_requested.connect(self._zoom_by)
 
         # --- empty state + selection bar (floating) ---
         self.empty = widgets.EmptyState("image", "Nothing here",
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
+        self.sticky = StickyDay(self)
         self.selbar = widgets.SelectionBar(self)
         self.selbar.btn_fav.clicked.connect(self._fav_selection)
         self.selbar.btn_album.clicked.connect(self._album_selection)
@@ -570,6 +619,59 @@ class GridPage(QWidget):
 
     def _sync_rail(self, _v=0):
         self.rail.set_pos(self.view.verticalScrollBar().value())
+        self._sync_sticky()
+
+    def _top_index(self):
+        """First item under the top of the viewport, skipping the layout gaps."""
+        w = self.view.viewport().width()
+        for y in range(2, 60, 4):
+            for x in (8, w // 2, max(8, w - 14)):
+                ix = self.view.indexAt(QPoint(x, y))
+                if ix.isValid():
+                    return ix
+        return None
+
+    def _sync_sticky(self):
+        """Pin the day you are inside, but not while its real header is visible."""
+        if self.level in ("year", "month") or not self.model.rowCount():
+            self.sticky.hide()
+            return
+        ix = self._top_index()
+        info = self.model.day_of_row(ix.row()) if ix is not None else None
+        if info is None:
+            self.sticky.hide()
+            return
+        day, count, head_row = info
+        if head_row >= 0:
+            top = self.view.visualRect(self.model.index(head_row, 0)).top()
+            if top > -6:                 # the real one is right there; two would read oddly
+                self.sticky.hide()
+                return
+        self.sticky.set_day(day, count)
+        self._place_sticky()
+        self.sticky.show()
+        self.sticky.raise_()
+
+    def _place_sticky(self):
+        pos = self.view.mapTo(self, QPoint(0, 0))
+        self.sticky.setGeometry(pos.x(), pos.y(), self.view.width(), StickyDay.HEIGHT)
+
+    def _zoom_by(self, steps):
+        """Ctrl+wheel: resize the thumbnails and stay where you were."""
+        ix = self._top_index()
+        row = ix.row() if ix is not None else -1
+        before = self.slider.value()
+        self.slider.setValue(max(self.slider.minimum(),
+                                 min(self.slider.maximum(), before + steps * 16)))
+        if self.slider.value() == before or row < 0:
+            return
+
+        def keep_place():
+            target = self.model.index(row, 0)
+            if target.isValid():
+                self.view.scrollTo(target, QAbstractItemView.PositionAtTop)
+            self._refresh_rail()
+        QTimer.singleShot(0, keep_place)
 
     # ------- selection / actions -------
     def _selected_items(self):
@@ -641,6 +743,8 @@ class GridPage(QWidget):
         QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
 
     def _position_overlays(self, animate_selbar=False):
+        if self.sticky.isVisible():
+            self._place_sticky()
         if self.empty.isVisible():
             self.empty.resize(self.view.size())
             self.empty.move(0, 0)

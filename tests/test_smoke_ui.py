@@ -220,6 +220,99 @@ def test_the_timeline_rail_lands_on_the_month_it_shows(window, app):
     assert checked >= 20, "too few marks were actually verifiable"
 
 
+def _many_photos(db, years=(2025, 2026)):
+    rows = []
+    for year in years:
+        for month in range(1, 13):
+            for d in (4, 12, 21):
+                day = f"{year}-{month:02d}-{d:02d}"
+                for n in range(5):
+                    rows.append({"path": f"/s/{year}{month:02d}{d}{n}.png", "folder": "/s",
+                                 "filename": f"VRChat_{day}_10-00-0{n}.000.png",
+                                 "taken_at": f"{day}T10:00:0{n}", "day": day,
+                                 "filesize": 10, "mtime": 1.0})
+    db.upsert_photos(rows)
+    return rows
+
+
+def test_ctrl_wheel_resizes_the_thumbnails_and_keeps_your_place(window, app):
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    bar = page.view.verticalScrollBar()
+    bar.setValue(int(bar.maximum() * 0.4))
+    app.processEvents()
+    before_row = page._top_index().row()
+    before_px = page.slider.value()
+
+    def wheel(delta, mods):
+        pos = QPointF(page.view.viewport().rect().center())
+        return QWheelEvent(pos, page.view.viewport().mapToGlobal(pos.toPoint()),
+                           QPoint(0, 0), QPoint(0, delta), Qt.NoButton, mods,
+                           Qt.NoScrollPhase, False)
+
+    page.view.wheelEvent(wheel(120, Qt.ControlModifier))
+    app.processEvents()
+    assert page.slider.value() > before_px, "ctrl+wheel up did not zoom in"
+    app.processEvents()
+    # the row you were looking at is still the row at the top
+    assert page._top_index().row() == before_row
+
+    page.view.wheelEvent(wheel(-120, Qt.ControlModifier))
+    app.processEvents()
+    assert page.slider.value() == before_px
+
+    # without ctrl it must still scroll, not zoom
+    at = bar.value()
+    page.view.wheelEvent(wheel(-120, Qt.NoModifier))
+    app.processEvents()
+    assert page.slider.value() == before_px
+    assert bar.value() != at
+    window.hide()
+
+
+def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
+    from PySide6.QtTest import QTest
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    bar = page.view.verticalScrollBar()
+    bar.setValue(0)
+    app.processEvents()
+    page._sync_sticky()
+    assert page.sticky.isHidden(), "nothing to pin while the real header is on screen"
+
+    bar.setValue(int(bar.maximum() * 0.35))
+    app.processEvents()
+    page._sync_sticky()
+    assert not page.sticky.isHidden(), "scrolled into a day but nothing was pinned"
+    top = page.model.day_of_row(page._top_index().row())
+    assert page.sticky._day == top[0]
+    assert page.sticky._count == top[1]
+    assert page.sticky.width() == page.view.width()
+
+    page.set_level("year")               # periods have no days to pin
+    page._sync_sticky()
+    assert page.sticky.isHidden()
+    page._level_clicked("day")
+    window.hide()
+
+
 def test_browsing_zooms_from_years_to_months_to_days(window, app):
     from vrchronicle.gridmodel import KIND_PERIOD, ItemRole, KindRole
 

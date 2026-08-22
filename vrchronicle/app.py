@@ -130,6 +130,10 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key == "scrolled":                 # mid-scroll, for the sticky day
+                win.activate("all")
+                bar = win.page_grid.view.verticalScrollBar()
+                bar.setValue(int(bar.maximum() * 0.12) or 400)
             elif key in ("years", "months"):        # the zoomed-out browsing levels
                 win.activate("all")
                 win.page_grid.set_level("year" if key == "years" else "month")
