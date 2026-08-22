@@ -481,7 +481,24 @@ def test_scrolling_does_not_redo_work_it_can_keep(window, app):
     again, _off = Glass.backdrop(page.headbar, page.view.viewport(), ttl=0)
     assert again is not first, "ttl=0 must force a fresh sample"
 
-    # a tile is rounded and scaled once, then blitted
+    # a settled tile is blitted whole: no rounded clip, no rescale. An
+    # antialiased clip path per tile is what made scrolling expensive.
+    import time as _time
+    from PySide6.QtGui import QPixmap as _QPix
+    d = page.delegate
+    thumb = _QPix(400, 225)
+    thumb.fill()
+    for it in page.model.photos()[:120]:      # stand in for decoded thumbnails
+        d.cache._mem[it.id] = thumb
+        d.cache._born[it.id] = _time.monotonic() - 5    # long since faded in
+    for _ in range(4):
+        app.processEvents()
+    d.blits = d.slow = 0
+    page.view.viewport().render(_QPix(page.view.viewport().size()))
+    assert d.blits + d.slow > 8, "no tiles were painted at all"
+    assert d.blits > d.slow, (
+        f"only {d.blits} of {d.blits + d.slow} tiles took the fast path")
+
     d = page.delegate
     d._tiles.clear()
     item = page.model.photos()[0]

@@ -289,6 +289,8 @@ class PhotoDelegate(QStyledItemDelegate):
         self.radius = 12
         self.dense = False
         self._tiles = OrderedDict()      # (id, w, h, dpr, radius) -> ready pixmap
+        self.blits = 0                   # tiles drawn the cheap way, and not
+        self.slow = 0
         self._accent = style.ACCENTS["orchid"]["a"]
         self._f_head = QFont()
         self._f_head.setPointSizeF(10.5)
@@ -461,15 +463,32 @@ class PhotoDelegate(QStyledItemDelegate):
 
     def _paint_photo(self, p, option, index):
         item = index.data(ItemRole)
-        r = option.rect.adjusted(0, 0, 0, 0)
+        r = option.rect
         rf = QRectF(r)
-        path = QPainterPath()
-        path.addRoundedRect(rf, self.radius, self.radius)
         hovered = bool(option.state & QStyle.State_MouseOver)
         selected = bool(option.state & QStyle.State_Selected)
+        _path = []
+
+        def path():
+            # built only when something actually clips: on a scrolling frame
+            # most tiles never touch it, and it is not free to construct
+            if not _path:
+                pp = QPainterPath()
+                pp.addRoundedRect(rf, self.radius, self.radius)
+                _path.append(pp)
+            return _path[0]
 
         pm = None if item.is_video else self.cache.get(item)
-        p.setClipPath(path)
+        # A ready tile is already rounded, so it needs no clip. An antialiased
+        # clip path per tile drops the raster engine onto its slow route, and
+        # scrolling pays for it on every visible tile of every frame.
+        blit = (pm is not None and not pm.isNull() and not item.is_video
+                and not hovered
+                and (self.cache.age_ms(item.id) or 999.0) >= 220.0)
+        self.blits += bool(blit)      # watched by a test: this is the fast path
+        self.slow += (not blit)
+        if not blit:
+            p.setClipPath(path())
         if item.is_video:
             # no frame is ever decoded from a recording; it gets its own tile
             p.fillRect(r, QColor(style.PAL["surface2"]))
@@ -505,7 +524,7 @@ class PhotoDelegate(QStyledItemDelegate):
                     self.view.viewport().update()
             pw, ph = pm.width(), pm.height()
             if pw > 0 and ph > 0:
-                if alpha >= 1.0 and zoom == 1.0:
+                if blit:
                     # the common case: everything about it is already decided
                     p.drawPixmap(r.topLeft(), self._tile(item, pm, r.width(), r.height()))
                 else:
@@ -518,6 +537,8 @@ class PhotoDelegate(QStyledItemDelegate):
                     p.drawPixmap(QRectF(dx, dy, dw, dh), pm, QRectF(0, 0, pw, ph))
                     p.setOpacity(1.0)
         if hovered or selected:
+            if blit:                      # the overlays do need the rounded shape
+                p.setClipPath(path())
             veil = QColor(255, 255, 255, 14 if hovered and not selected else 10)
             p.fillRect(r, veil)
         if hovered:
