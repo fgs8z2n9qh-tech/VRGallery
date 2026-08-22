@@ -20,6 +20,28 @@ EXPORT_DIR = os.path.join(APPDIR, "exports")
 _crash_fh = None
 
 
+def set_appdir(directory):
+    """Point the whole app at a different data folder.
+
+    Must be called before anything opens the database. Used by --data-dir, which
+    exists so a throwaway copy of a library can be run side by side with the real
+    one (documentation screenshots, testing) without touching it.
+    """
+    global APPDIR, THUMB_DIR, DB_PATH, CONFIG_PATH, CRASH_LOG, LOCK_PATH, EXPORT_DIR
+    APPDIR = os.path.abspath(directory)
+    THUMB_DIR = os.path.join(APPDIR, "thumbs")
+    DB_PATH = os.path.join(APPDIR, "vrchronicle.db")
+    CONFIG_PATH = os.path.join(APPDIR, "config.json")
+    CRASH_LOG = os.path.join(APPDIR, "crash.log")
+    LOCK_PATH = os.path.join(APPDIR, "vrchronicle.lock")
+    EXPORT_DIR = os.path.join(APPDIR, "exports")
+
+
+def is_default_appdir():
+    base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
+    return os.path.normcase(APPDIR) == os.path.normcase(os.path.join(base, APP_NAME))
+
+
 def migrate_legacy_appdir():
     """Adopt the data folder from a previous name (Aperture -> VRChronicle).
 
@@ -27,7 +49,7 @@ def migrate_legacy_appdir():
     VRChronicle library is never touched. Best-effort: on failure we simply
     start with an empty library and reindex.
     """
-    if os.path.isdir(APPDIR):
+    if os.path.isdir(APPDIR) or not is_default_appdir():
         return False
     base = os.path.dirname(APPDIR)
     for old_name in _LEGACY_NAMES:

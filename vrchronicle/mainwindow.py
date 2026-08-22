@@ -55,11 +55,12 @@ def _nav_icon(name):
 
 
 class MainWindow(QMainWindow):
-    def __init__(self, app, cfg, db):
+    def __init__(self, app, cfg, db, auto_index=True):
         super().__init__()
         self.app = app
         self.cfg = cfg
         self.db = db
+        self.auto_index = auto_index
         self.setWindowTitle(paths.APP_NAME)
         self.resize(1500, 920)
         self.setMinimumSize(1080, 660)
@@ -173,8 +174,12 @@ class MainWindow(QMainWindow):
         self.bridge.sheet_ready.connect(self._on_sheet_ready)
         self.bridge.backup_planned.connect(self._on_backup_planned)
 
-        self.watcher = LiveWatcher(cfg, self)
-        self.watcher.changed.connect(self._on_watch_changed)
+        # --no-index keeps a throwaway copy of a library exactly as it is, which
+        # is what documentation screenshots need
+        self.watcher = None
+        if auto_index:
+            self.watcher = LiveWatcher(cfg, self)
+            self.watcher.changed.connect(self._on_watch_changed)
 
         # ---------------- tray + local API ----------------
         self._quitting = False
@@ -195,7 +200,8 @@ class MainWindow(QMainWindow):
         QShortcut(QKeySequence("Ctrl+F"), self, self._focus_search)
 
         self.activate("all")
-        QTimer.singleShot(150, self.start_index)
+        if auto_index:
+            QTimer.singleShot(150, self.start_index)
 
     # ---------------- navigation ----------------
     def activate(self, key):
@@ -314,6 +320,8 @@ class MainWindow(QMainWindow):
 
     # ---------------- indexing ----------------
     def start_index(self):
+        if not self.auto_index:
+            return
         if self._index_worker and self._index_worker.isRunning():
             return
         if self._index_worker is not None:
@@ -345,7 +353,8 @@ class MainWindow(QMainWindow):
         rows = self.db.unscanned()
         if rows:
             self.svc.sweep(rows)
-        self.watcher.rearm()
+        if self.watcher is not None:
+            self.watcher.rearm()
 
     def _on_watch_changed(self):
         self.start_index()

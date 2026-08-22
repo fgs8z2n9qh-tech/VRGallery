@@ -7,16 +7,23 @@ from . import paths
 
 
 def main(argv=None):
-    paths.ensure_dirs()
-    paths.enable_crash_log()
-
     ap = argparse.ArgumentParser(prog="vrchronicle")
+    ap.add_argument("--data-dir", metavar="DIR",
+                    help="use a different library folder instead of "
+                         "%LOCALAPPDATA%\\VRChronicle")
     ap.add_argument("--index", action="store_true", help="headless index, then exit")
     ap.add_argument("--tray", action="store_true", help="start hidden in the system tray")
+    ap.add_argument("--no-index", action="store_true",
+                    help="do not scan or watch for changes; show the library as it is")
     ap.add_argument("--shot", metavar="PNG", help="screenshot the window to a file and exit")
     ap.add_argument("--page", default="all", help="page key for --shot")
     ap.add_argument("--wait", type=int, default=2600, help="ms to wait before --shot")
     args = ap.parse_args(argv)
+
+    if args.data_dir:
+        paths.set_appdir(args.data_dir)
+    paths.ensure_dirs()
+    paths.enable_crash_log()
 
     if args.index:
         from PySide6.QtCore import QCoreApplication
@@ -68,7 +75,7 @@ def main(argv=None):
     cfg = Config()
     app.setStyleSheet(style.build_qss(cfg.get("accent")))
     db = Database()
-    win = MainWindow(app, cfg, db)
+    win = MainWindow(app, cfg, db, auto_index=not args.no_index)
 
     geo = cfg.get("window")
     if isinstance(geo, list) and len(geo) == 5:
