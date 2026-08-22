@@ -101,6 +101,10 @@ is ever deleted permanently.
 
 ![Cleanup](docs/07-cleanup.png)
 
+**Recently deleted** lists what VRChronicle put in the Recycle Bin, with the date, and
+puts any of it back where it came from. Nothing can be permanently deleted from there
+either.
+
 ## Everything else
 
 - Timeline with a month/year rail, search by world / person / file, favorites, albums
