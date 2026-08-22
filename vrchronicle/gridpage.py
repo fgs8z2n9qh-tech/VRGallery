@@ -1,6 +1,6 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
 from PySide6.QtCore import QDate, QRectF, QSize, Qt, QTimer, Signal
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QComboBox, QDateEdit, QFrame,
                                QHBoxLayout, QLabel, QLineEdit, QSlider, QVBoxLayout,
                                QWidget)
@@ -14,7 +14,7 @@ class TimelineRail(QWidget):
     """A thin month scale beside the grid: click or drag to jump through years."""
     jump_to = Signal(int)
 
-    WIDTH = 52
+    WIDTH = 54
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -22,6 +22,7 @@ class TimelineRail(QWidget):
         self._marks = []          # (model_row, "YYYY-MM")
         self._rows = 0
         self._row = 0.0           # current top row, same scale as the marks
+        self._hover_y = None      # where the pointer is, for the month bubble
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -49,41 +50,75 @@ class TimelineRail(QWidget):
         cfg = getattr(page, "cfg", None)
         return cfg.get("accent") if cfg is not None else style.DEFAULT_ACCENT
 
+    def _month_at(self, row):
+        if not self._marks:
+            return ""
+        return min(self._marks, key=lambda m: abs(m[0] - row))[1]
+
     def paintEvent(self, _ev):
         if len(self._marks) < 2:
             return
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         f = QFont()
-        f.setPointSizeF(7.5)
+        f.setPointSizeF(8.5)
         p.setFont(f)
         fm = QFontMetrics(f)
+        right = self.WIDTH - 5
 
-        last_label_y = -999
+        # Months are ticks only. Spelling every month out turned the rail into a
+        # column of tiny words with no hierarchy; the year is what you navigate by.
         last_year = None
+        year_ys = []
         for row, ym in self._marks:
             y = self._y_for(row)
             year = ym[:4]
-            new_year = year != last_year
-            p.setPen(QColor(style.PAL["border2"] if not new_year else style.PAL["faint"]))
-            p.drawLine(self.WIDTH - 12, int(y), self.WIDTH - (4 if new_year else 8), int(y))
-            if y - last_label_y > fm.height() + 5:
-                try:
-                    text = year if new_year else fmt.MONTHS_SHORT[int(ym[5:7]) - 1]
-                except (ValueError, IndexError):
-                    text = year
-                p.setPen(QColor(style.PAL["dim"] if new_year else style.PAL["faint"]))
-                p.drawText(QRectF(0, y - fm.height() / 2, self.WIDTH - 16, fm.height()),
-                           Qt.AlignRight | Qt.AlignVCenter, text)
-                last_label_y = y
+            if year != last_year:
+                year_ys.append((y, year))
+            else:
+                p.setPen(QColor(style.PAL["border2"]))
+                p.drawLine(right - 5, int(y), right, int(y))
             last_year = year
+
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        last_label = -999
+        for y, year in year_ys:
+            p.setPen(QColor(style.PAL["border"]))
+            p.drawLine(right - 9, int(y), right, int(y))
+            if y - last_label > fm.height() + 4:
+                p.setPen(QColor(style.PAL["dim"]))
+                p.drawText(QRectF(0, y - fm.height() / 2, right - 12, fm.height()),
+                           Qt.AlignRight | Qt.AlignVCenter, year)
+                last_label = y
 
         ac = style.accent(self._accent_key())
         y = self._y_for(self._row)
         p.setPen(Qt.NoPen)
         p.setBrush(QColor(ac["a"]))
-        p.drawRoundedRect(QRectF(self.WIDTH - 14, y - 2.5, 11, 5), 2.5, 2.5)
+        p.drawRoundedRect(QRectF(right - 11, y - 2.5, 11, 5), 2.5, 2.5)
+
+        # where you would land, spelled out only while you are actually aiming
+        if self._hover_y is not None:
+            label = fmt.month_label(self._month_at(self._row_at(self._hover_y)))
+            if label:
+                f.setPointSizeF(9.0)
+                p.setFont(f)
+                fm2 = QFontMetrics(f)
+                w, h = fm2.horizontalAdvance(label) + 18, fm2.height() + 10
+                by = min(max(3.0, self._hover_y - h / 2), self.height() - h - 3)
+                box = QRectF(right - 13 - w, by, w, h)
+                p.setBrush(QColor(12, 14, 20, 235))
+                p.setPen(QPen(QColor(ac["a"]), 1))
+                p.drawRoundedRect(box, 8, 8)
+                p.setPen(QColor(style.PAL["text"]))
+                p.drawText(box, Qt.AlignCenter, label)
         p.end()
+
+    def leaveEvent(self, ev):
+        self._hover_y = None
+        self.update()
+        super().leaveEvent(ev)
 
     def mousePressEvent(self, ev):
         self.jump_to.emit(self._row_at(ev.position().y()))
@@ -91,10 +126,8 @@ class TimelineRail(QWidget):
     def mouseMoveEvent(self, ev):
         if ev.buttons() & Qt.LeftButton:
             self.jump_to.emit(self._row_at(ev.position().y()))
-        if self._marks:                       # tell them where they are about to land
-            row = self._row_at(ev.position().y())
-            nearest = min(self._marks, key=lambda m: abs(m[0] - row))
-            self.setToolTip(fmt.month_label(nearest[1]))
+        self._hover_y = ev.position().y()     # draws the month you are aiming at
+        self.update()
 
 
 class GridPage(QWidget):
@@ -163,7 +196,7 @@ class GridPage(QWidget):
         self.slider.valueChanged.connect(self._on_slider)
         head.addWidget(self.slider)
 
-        self.btn_filter = widgets.icon_btn("settings", "More filters", style.PAL["dim"],
+        self.btn_filter = widgets.icon_btn("filter", "More filters", style.PAL["dim"],
                                            checkable=True)
         self.btn_filter.toggled.connect(self._toggle_filters)
         head.addWidget(self.btn_filter)

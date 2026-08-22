@@ -18,6 +18,8 @@ def main(argv=None):
     ap.add_argument("--shot", metavar="PNG", help="screenshot the window to a file and exit")
     ap.add_argument("--page", default="all", help="page key for --shot")
     ap.add_argument("--wait", type=int, default=2600, help="ms to wait before --shot")
+    ap.add_argument("--size", metavar="WxH",
+                    help="window size for --shot, e.g. 1100x700 (checks narrow layouts)")
     args = ap.parse_args(argv)
 
     if args.data_dir:
@@ -81,6 +83,13 @@ def main(argv=None):
         cfg.set("onboarded", True)
     win = MainWindow(app, cfg, db, auto_index=not args.no_index)
 
+    if args.size:
+        try:
+            w, h = (int(n) for n in args.size.lower().split("x"))
+            win.resize(w, h)
+            cfg.set("window", [win.x(), win.y(), w, h, False], save=False)
+        except (ValueError, TypeError):
+            pass
     geo = cfg.get("window")
     if isinstance(geo, list) and len(geo) == 5:
         x, y, w, h, maxed = geo

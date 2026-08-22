@@ -419,15 +419,12 @@ class SessionsPage(QWidget):
         f = PhotoFilter(session_id=sid, sort_desc=False)
         photos = self.main.db.query_photos(f)[:9]
         if photos:
-            strip = QHBoxLayout()
-            strip.setSpacing(8)
+            strip = ThumbStrip()
             for prow in photos:
                 mini = MiniItem(prow["id"], prow["path"], prow["mtime"], prow["filesize"], 1)
-                strip.addWidget(ThumbStripLabel(
-                    self.main, self.cache, mini,
-                    lambda s=sid, n=r["world_name"]: self.main.push_session(s, n)))
-            strip.addStretch(1)
-            card.vbox.addLayout(strip)
+                strip.add(self.main, self.cache, mini,
+                          lambda s=sid, n=r["world_name"]: self.main.push_session(s, n))
+            card.vbox.addWidget(strip)
         return card
 
     @staticmethod
@@ -486,11 +483,8 @@ class PersonPage(QWidget):
         v.addLayout(tiles)
 
         self.card_strip = widgets.Card("RECENT TOGETHER")
-        self.strip_holder = QWidget()
-        self.strip = QHBoxLayout(self.strip_holder)
-        self.strip.setContentsMargins(0, 0, 0, 0)
-        self.strip.setSpacing(8)
-        self.card_strip.vbox.addWidget(self.strip_holder)
+        self.strip = ThumbStrip()
+        self.card_strip.vbox.addWidget(self.strip)
         v.addWidget(self.card_strip)
 
         row = QHBoxLayout()
@@ -545,16 +539,12 @@ class PersonPage(QWidget):
         self.chart_months.set_data([(fmt.month_label(m["m"]), m["c"])
                                     for m in s["months"][-24:]])
 
-        while self.strip.count():
-            it = self.strip.takeAt(0)
-            if it.widget():
-                it.widget().deleteLater()
+        self.strip.clear()
         rows = self.main.db.query_photos(PhotoFilter(person=name))[:9]
         for prow in rows:
             mini = MiniItem(prow["id"], prow["path"], prow["mtime"], prow["filesize"], 1)
-            self.strip.addWidget(ThumbStripLabel(
-                self.main, self.cache, mini, lambda nm=name: self.main.push_person(nm)))
-        self.strip.addStretch(1)
+            self.strip.add(self.main, self.cache, mini,
+                           lambda nm=name: self.main.push_person(nm))
         self.card_strip.setVisible(bool(rows))
 
 
@@ -660,15 +650,11 @@ class MomentsPage(QWidget):
                 flow.addWidget(b)
             card.vbox.addWidget(chips)
 
-        strip = QHBoxLayout()
-        strip.setSpacing(8)
+        strip = ThumbStrip(max_h=240)
         for prow in self.main.db.photos_by_ids_full(m["ids"][:9]):
             mini = MiniItem(prow["id"], prow["path"], prow["mtime"], prow["filesize"], 1)
-            strip.addWidget(ThumbStripLabel(
-                self.main, self.cache, mini,
-                lambda mm=m: self.main.push_moment(mm)))
-        strip.addStretch(1)
-        card.vbox.addLayout(strip)
+            strip.add(self.main, self.cache, mini, lambda mm=m: self.main.push_moment(mm))
+        card.vbox.addWidget(strip)
         return card
 
     def _save_album(self, m):
@@ -752,9 +738,24 @@ class ThumbStripLabel(QWidget):
         self._on_click = on_click
         self.setFixedSize(w, h)
         self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+        self._hover = False
         # Connecting every strip thumbnail to cache.ready would make one arriving
         # image wake all of them; the cache keeps a per-photo registry instead.
         cache.watch(item.id, self)
+
+    def set_tile(self, w, h):
+        self.setFixedSize(int(w), int(h))
+
+    def enterEvent(self, ev):
+        self._hover = True
+        self.update()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._hover = False
+        self.update()
+        super().leaveEvent(ev)
 
     def _maybe_update(self, pid):
         if pid == self.item.id:
@@ -777,12 +778,78 @@ class ThumbStripLabel(QWidget):
                                 dw, dh), pm, QRectF(0, 0, pw, ph))
         else:
             p.fillRect(r, QColor(style.PAL["surface2"]))
+        if self._hover:                       # it is clickable, so it must say so
+            p.setClipping(False)
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 150), 2))
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 10, 10)
         p.end()
 
     def mouseReleaseEvent(self, ev):
         if ev.button() == Qt.LeftButton and self._on_click:
             self._on_click()
         super().mouseReleaseEvent(ev)
+
+
+class ThumbStrip(QWidget):
+    """A row of thumbnails that sizes its tiles to what there is to show.
+
+    Fixed 158x88 stamps left a card with two photos looking 90% empty, because
+    the card is as wide as the window whatever it holds. The tiles now grow to
+    fill the row, up to a height that keeps a single photo from becoming a
+    billboard.
+    """
+
+    GAP = 8
+    MIN_W = 132
+    RATIO = 16 / 9
+
+    def __init__(self, max_h=150, parent=None):
+        super().__init__(parent)
+        self._tiles = []
+        self._max_h = max_h        # a dense list stays compact; a highlight row
+        self._h = 88               # can afford to be tall
+
+    def add(self, main, cache, item, on_click):
+        self._tiles.append(ThumbStripLabel(main, cache, item, on_click, parent=self))
+        self._relayout()
+
+    def clear(self):
+        for t in self._tiles:
+            t.setParent(None)
+            t.deleteLater()
+        self._tiles = []
+
+    def count(self):
+        return len(self._tiles)
+
+    def _relayout(self):
+        n = len(self._tiles)
+        if not n:
+            self._h = 0
+            self.setFixedHeight(0)
+            return
+        avail = max(self.MIN_W, self.width() or self.MIN_W * n)
+        fill = (avail - self.GAP * (n - 1)) / n
+        # enough photos and the row fills exactly; a lone one grows only to the
+        # row height, instead of becoming a billboard
+        w = max(self.MIN_W, min(fill, self._max_h * self.RATIO))
+        h = round(w / self.RATIO)
+        x = 0
+        for t in self._tiles:
+            t.set_tile(round(w), h)
+            t.move(round(x), 0)
+            t.show()
+            x += w + self.GAP
+        self._h = h
+        self.setFixedHeight(h)
+
+    def resizeEvent(self, ev):
+        super().resizeEvent(ev)
+        self._relayout()
+
+    def sizeHint(self):
+        return QSize(self.MIN_W, self._h)
 
 
 class MemoriesPage(QWidget):
@@ -852,18 +919,15 @@ class MemoriesPage(QWidget):
             top.addStretch(1)
             top.addWidget(btn)
             card.vbox.addLayout(top)
-            strip = QHBoxLayout()
-            strip.setSpacing(8)
+            strip = ThumbStrip(max_h=240)
             f = PhotoFilter(day=day, sort_desc=False)
             photos = self.main.db.query_photos(f)[:9]
             for prow in photos:
                 mini = MiniItem(prow["id"], prow["path"], prow["mtime"],
                                 prow["filesize"], 1)
-                strip.addWidget(ThumbStripLabel(
-                    self.main, self.cache, mini,
-                    lambda d=day: self.main.push_day(d)))
-            strip.addStretch(1)
-            card.vbox.addLayout(strip)
+                strip.add(self.main, self.cache, mini,
+                          lambda d=day: self.main.push_day(d))
+            card.vbox.addWidget(strip)
             self.vbox.addWidget(card)
         self.vbox.addStretch(1)
 
@@ -1600,8 +1664,17 @@ class SettingsPage(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         holder = QWidget()
-        v = QVBoxLayout(holder)
-        v.setContentsMargins(0, 0, 8, 20)
+        # A settings form stretched to the width of a maximised window puts the
+        # label at one edge of the screen and its control at the other. Cap it
+        # and keep it against the left margin, where the reading starts.
+        outer = QHBoxLayout(holder)
+        outer.setContentsMargins(0, 0, 8, 20)
+        column = QWidget()
+        column.setMaximumWidth(920)
+        outer.addWidget(column, 1, Qt.AlignTop)   # grows to its maximum, then stops
+        outer.addStretch(0)
+        v = QVBoxLayout(column)
+        v.setContentsMargins(0, 0, 0, 0)
         v.setSpacing(12)
 
         # folders
