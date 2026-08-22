@@ -1,6 +1,6 @@
 """Small reusable UI pieces: flow layout, toast, cards, empty state, buttons."""
-from PySide6.QtCore import (QEasingCurve, QPoint, QPointF, QPropertyAnimation, QRect,
-                            QRectF, QSize, Qt, QTimer)
+from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
+                            QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer)
 from PySide6.QtGui import QColor, QLinearGradient, QPainter, QPainterPath, QPen
 from PySide6.QtWidgets import (QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel, QLayout,
                                QPushButton, QSizePolicy, QVBoxLayout, QWidget)
@@ -89,6 +89,82 @@ class Glass:
         p.setPen(QPen(QColor(255, 255, 255, 46), 1))
         p.drawPath(path)
         return blurred is not None
+
+
+class SmoothScroll(QObject):
+    """Eases a scroll area towards a target instead of jumping to it.
+
+    A wheel notch moves the bar by a fixed number of pixels at once, which on a
+    photo grid reads as a stutter. Notches accumulate into a target here and a
+    timer walks the bar towards it, so a fast flick glides rather than stepping.
+    """
+
+    def __init__(self, view, step=170, ease=0.22, parent=None):
+        super().__init__(parent or view)
+        self.view = view
+        self.step = step
+        self.ease = ease
+        self._target = None
+        self._timer = QTimer(self)
+        self._timer.setInterval(16)          # ~60 fps
+        self._timer.timeout.connect(self._tick)
+        view.viewport().installEventFilter(self)
+
+    def eventFilter(self, obj, ev):
+        try:
+            mine = obj is self.view.viewport()
+        except RuntimeError:      # the view went away before its filter did
+            self._timer.stop()
+            return False
+        if mine and ev.type() == QEvent.Wheel:
+            if ev.modifiers() & Qt.ControlModifier:
+                return False              # ctrl+wheel is a zoom, not a scroll
+            if ev.angleDelta().x() and not ev.angleDelta().y():
+                return False              # sideways: let the view have it
+            if self.wheel(ev.angleDelta().y()):
+                ev.accept()
+                return True
+        return super().eventFilter(obj, ev)
+
+    def bar(self):
+        return self.view.verticalScrollBar()
+
+    def wheel(self, angle_delta_y):
+        """-> True if the gesture was taken over."""
+        if not angle_delta_y:
+            return False
+        bar = self.bar()
+        base = self._target if self._target is not None else bar.value()
+        notches = angle_delta_y / 120.0
+        self._target = max(bar.minimum(),
+                           min(bar.maximum(), int(base - notches * self.step)))
+        if self._target == bar.value():
+            self._target = None
+            return True
+        if not self._timer.isActive():
+            self._timer.start()
+        return True
+
+    def stop(self):
+        self._timer.stop()
+        self._target = None
+
+    def _tick(self):
+        try:
+            bar = self.bar()
+        except RuntimeError:
+            self._timer.stop()
+            return
+        if self._target is None:
+            self._timer.stop()
+            return
+        cur = bar.value()
+        gap = self._target - cur
+        if abs(gap) <= 1:
+            bar.setValue(self._target)
+            self.stop()
+            return
+        bar.setValue(int(cur + gap * self.ease + (1 if gap > 0 else -1)))
 
 
 class GlassBar(QFrame):

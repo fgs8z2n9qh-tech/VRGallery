@@ -460,6 +460,57 @@ def test_all_shows_one_continuous_sheet_of_photos(window, app):
     window.hide()
 
 
+def test_the_wheel_glides_instead_of_jumping(window, app):
+    """One notch used to move the bar in a single step."""
+    from PySide6.QtCore import QPoint, QPointF, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtTest import QTest
+
+    _many_photos(window.db)
+    window.resize(1200, 820)
+    window.show()
+    QTest.qWaitForWindowExposed(window)
+    window.activate("all")
+    page = window.page_grid
+    app.processEvents()
+
+    bar = page.view.verticalScrollBar()
+    bar.setValue(0)
+    app.processEvents()
+    smooth = page.view.smooth
+
+    pos = QPointF(page.view.viewport().rect().center())
+    ev = QWheelEvent(pos, page.view.viewport().mapToGlobal(pos.toPoint()),
+                     QPoint(0, 0), QPoint(0, -120), Qt.NoButton, Qt.NoModifier,
+                     Qt.NoScrollPhase, False)
+    app.sendEvent(page.view.viewport(), ev)
+
+    assert smooth._target == smooth.step, "the notch did not set a target"
+    assert bar.value() == 0, "the bar must not jump to it in one step"
+
+    seen = []
+    for _ in range(40):                       # walk the animation by hand
+        smooth._tick()
+        seen.append(bar.value())
+        if smooth._target is None:
+            break
+    assert len(seen) > 4, f"it arrived in {len(seen)} steps, that is a jump"
+    assert seen == sorted(seen), "it must only move one way"
+    assert seen[-1] == smooth.step
+    # decelerating: the first step is the biggest
+    assert seen[0] - 0 > seen[-1] - seen[-2]
+
+    # ctrl+wheel still zooms rather than scrolling
+    before = page.slider.value()
+    ev = QWheelEvent(pos, page.view.viewport().mapToGlobal(pos.toPoint()),
+                     QPoint(0, 0), QPoint(0, 120), Qt.NoButton, Qt.ControlModifier,
+                     Qt.NoScrollPhase, False)
+    app.sendEvent(page.view.viewport(), ev)
+    app.processEvents()
+    assert page.slider.value() > before
+    window.hide()
+
+
 def test_the_floating_panels_render_their_glass(window, app):
     """Glass samples a sibling's content, which mapTo cannot address.
 

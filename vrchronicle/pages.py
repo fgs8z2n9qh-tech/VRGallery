@@ -180,6 +180,7 @@ class CardsPage(QWidget):
         self.view.setModel(self.model)
         self.delegate = CardDelegate(self.view, cache, self)
         self.view.setItemDelegate(self.delegate)
+        self.smooth = widgets.SmoothScroll(self.view)
         self.view.clicked.connect(self._clicked)
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context)

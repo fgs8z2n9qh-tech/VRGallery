@@ -559,6 +559,8 @@ class GridView(QListView):
         self.verticalScrollBar().setSingleStep(48)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QListView.NoFrame)
+        from . import widgets
+        self.smooth = widgets.SmoothScroll(self)
         self.doubleClicked.connect(self._maybe_open)
         # a period card is a place to go, not a thing to select: one click
         self.clicked.connect(self._maybe_drill)

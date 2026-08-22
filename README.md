@@ -32,7 +32,8 @@ lays the whole library out as one uninterrupted sheet of square tiles.
 
 ![Browsing by year](docs/11-years.png)
 
-Scrolling down folds the page title away and the toolbar shrinks to just its controls;
+The wheel glides rather than stepping: notches accumulate into a target and the view
+eases towards it. Scrolling down folds the page title away and the toolbar shrinks to just its controls;
 scrolling back to the top brings it out again. At the Days level the day you are inside
 stays pinned to the top while you scroll,
 **Ctrl+wheel** resizes the thumbnails without losing your place, and the rail down the
