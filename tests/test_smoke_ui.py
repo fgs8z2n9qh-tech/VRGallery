@@ -306,11 +306,17 @@ def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
     top = page.model.day_of_row(page._top_index().row())
     assert page.sticky._day == top[0]
     assert page.sticky._count == top[1]
-    # inset from the viewport like the header above it, so neither the
-    # scrollbar nor the timeline rail is covered
-    m = page.HEAD_MARGIN
-    assert page.sticky.width() == page.view.viewport().width() - m * 2
-    assert page.headwrap.width() == page.sticky.width()
+    # it is the grid's own day header frozen, so it spans the viewport and
+    # keeps that row's left inset rather than being indented like a card
+    assert page.sticky.width() == page.view.viewport().width()
+    from vrchronicle.gridmodel import KIND_HEADER, KindRole
+    for r in range(page.model.rowCount()):
+        ix = page.model.index(r, 0)
+        if ix.data(KindRole) == KIND_HEADER:
+            assert page.sticky.PAD == page.view.visualRect(ix).x() + 4
+            break
+    else:
+        raise AssertionError("no day header to compare against")
 
     page.set_level("year")               # periods have no days to pin
     page._sync_sticky()

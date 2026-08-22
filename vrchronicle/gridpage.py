@@ -204,11 +204,13 @@ class TimelineRail(QWidget):
 class StickyDay(QWidget):
     """The day you are inside, pinned to the top of the grid while you scroll.
 
-    Painted rather than styled so it matches the day headers in the grid
-    exactly -- same font, same two-column layout.
+    It is the grid's own day header, frozen -- not a card of its own. So it
+    keeps that row's exact left inset: made into a floating pill it sat 21px
+    further right, and the text jumped sideways the moment a day pinned.
     """
 
-    HEIGHT = 38
+    HEIGHT = 40
+    PAD = 11          # where the grid draws its day headers, measured
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -230,26 +232,27 @@ class StickyDay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
-        # Solid, deliberately. It spans the whole width while the photos under
-        # it only reach partway across, so glass here would be half smeared
-        # picture and half flat background. Shaped like the header above it.
+        r = QRectF(self.rect())
+        # Solid and square: it spans the whole width while the photos under it
+        # only reach partway across, so glass here would be half smeared
+        # picture and half flat background.
+        p.fillRect(r, QColor(style.PAL["bg"]))
         p.setPen(QPen(QColor(style.PAL["border"]), 1))
-        p.setBrush(QColor(style.PAL["bg"]))
-        p.drawRoundedRect(r, 14, 14)
+        p.drawLine(QPointF(r.left(), r.bottom() - 0.5),
+                   QPointF(r.right(), r.bottom() - 0.5))
         f = QFont()
         f.setPointSizeF(10.5)
         f.setWeight(QFont.DemiBold)
         p.setFont(f)
-        text_r = r.adjusted(4, 0, -4, -8)
+        text_r = r.adjusted(self.PAD, 0, -self.PAD, 0)
         p.setPen(QColor(style.PAL["text"]))
-        p.drawText(text_r, Qt.AlignLeft | Qt.AlignBottom, fmt.day_label(self._day))
+        p.drawText(text_r, Qt.AlignLeft | Qt.AlignVCenter, fmt.day_label(self._day))
         f2 = QFont(f)
         f2.setWeight(QFont.Normal)
         f2.setPointSizeF(9.5)
         p.setFont(f2)
         p.setPen(QColor(style.PAL["faint"]))
-        p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom,
+        p.drawText(text_r, Qt.AlignRight | Qt.AlignVCenter,
                    f"{self._count} {fmt.plural(self._count, 'photo')}")
         p.end()
 
@@ -693,11 +696,10 @@ class GridPage(QWidget):
     def _place_sticky(self):
         # the viewport, not the view: it must not lie across the scrollbar, and
         # the glass under it can only be sampled from the viewport anyway
-        m = self.HEAD_MARGIN
         vp = self.view.viewport()
         pos = vp.mapTo(self, QPoint(0, 0))
-        self.sticky.setGeometry(pos.x() + m, pos.y() + self.head_height(),
-                                max(160, vp.width() - m * 2), StickyDay.HEIGHT)
+        self.sticky.setGeometry(pos.x(), pos.y() + self.head_height(),
+                                vp.width(), StickyDay.HEIGHT)
 
     def _zoom_by(self, steps):
         """Ctrl+wheel: resize the thumbnails and stay where you were."""
