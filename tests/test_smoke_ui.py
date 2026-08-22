@@ -306,7 +306,11 @@ def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
     top = page.model.day_of_row(page._top_index().row())
     assert page.sticky._day == top[0]
     assert page.sticky._count == top[1]
-    assert page.sticky.width() == page.view.viewport().width()
+    # inset from the viewport like the header above it, so neither the
+    # scrollbar nor the timeline rail is covered
+    m = page.HEAD_MARGIN
+    assert page.sticky.width() == page.view.viewport().width() - m * 2
+    assert page.headwrap.width() == page.sticky.width()
 
     page.set_level("year")               # periods have no days to pin
     page._sync_sticky()
@@ -339,7 +343,10 @@ def test_the_grid_scrolls_under_the_floating_header(window, app):
     assert page.model.index(0, 0).data(KindRole) == KIND_SPACER
     # the view reaches the top of the page: there is content under the header
     assert page.view.mapTo(page, QPoint(0, 0)).y() == 0
-    assert page.headwrap.geometry().top() == 0
+    assert page.headwrap.geometry().top() == 0   # flush: no sliver above it
+    # it must not lie across the scrollbar or the rail
+    vp = page.view.viewport()
+    assert page.headwrap.geometry().right() <= vp.mapTo(page, QPoint(vp.width(), 0)).x()
 
     # nothing is hidden at rest: the first real row starts below the header
     first = page.view.visualRect(page.model.index(1, 0))

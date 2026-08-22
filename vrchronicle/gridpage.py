@@ -1,6 +1,6 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import (QDate, QPoint, QPointF, QRectF, QSize, Qt, QTimer,
-                            Signal)
+from PySide6.QtCore import (QDate, QEvent, QPoint, QPointF, QRectF, QSize, Qt,
+                            QTimer, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
                                QFrame, QHBoxLayout, QLabel, QLineEdit, QPushButton,
@@ -230,15 +230,13 @@ class StickyDay(QWidget):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        r = QRectF(self.rect())
-        # Solid, deliberately. This bar spans the whole width while the photos
-        # under it only reach partway across, so glass here is half smeared
-        # picture and half flat background -- lopsided, and blurring a 38px
-        # strip only ever produces bands.
-        p.fillRect(r, QColor(style.PAL["bg"]))
-        p.setPen(QColor(style.PAL["border"]))
-        p.drawLine(QPointF(r.left(), r.bottom() - 0.5),
-                   QPointF(r.right(), r.bottom() - 0.5))
+        r = QRectF(self.rect()).adjusted(0.5, 0.5, -0.5, -0.5)
+        # Solid, deliberately. It spans the whole width while the photos under
+        # it only reach partway across, so glass here would be half smeared
+        # picture and half flat background. Shaped like the header above it.
+        p.setPen(QPen(QColor(style.PAL["border"]), 1))
+        p.setBrush(QColor(style.PAL["bg"]))
+        p.drawRoundedRect(r, 14, 14)
         f = QFont()
         f.setPointSizeF(10.5)
         f.setWeight(QFont.DemiBold)
@@ -278,7 +276,7 @@ class GridPage(QWidget):
         # The header floats over the grid so the photos scroll underneath it and
         # show through the glass. The grid gets a spacer row of the same height
         # so nothing starts life hidden behind it.
-        self.headbar = widgets.GlassBar(self)
+        self.headbar = widgets.GlassBar(self, radius=16)
         head = QHBoxLayout(self.headbar)
         head.setContentsMargins(24, 10, 24, 10)
         head.setSpacing(10)
@@ -385,6 +383,10 @@ class GridPage(QWidget):
         body.addWidget(self.rail)
         root.addLayout(body, 1)
         self.view.verticalScrollBar().valueChanged.connect(self._sync_rail)
+        # The floating bars are bound to the viewport, and the viewport shrinks
+        # whenever the scrollbar or the rail appears -- which the page's own
+        # resizeEvent never hears about.
+        self.view.viewport().installEventFilter(self)
 
         cache.ready.connect(self.model.notify_thumb)
         self.delegate.fav_clicked.connect(lambda pid: self.main.act_favorite([pid]))
@@ -691,10 +693,11 @@ class GridPage(QWidget):
     def _place_sticky(self):
         # the viewport, not the view: it must not lie across the scrollbar, and
         # the glass under it can only be sampled from the viewport anyway
+        m = self.HEAD_MARGIN
         vp = self.view.viewport()
         pos = vp.mapTo(self, QPoint(0, 0))
-        self.sticky.setGeometry(pos.x(), pos.y() + self.head_height(),
-                                vp.width(), StickyDay.HEIGHT)
+        self.sticky.setGeometry(pos.x() + m, pos.y() + self.head_height(),
+                                max(160, vp.width() - m * 2), StickyDay.HEIGHT)
 
     def _zoom_by(self, steps):
         """Ctrl+wheel: resize the thumbnails and stay where you were."""
@@ -782,15 +785,32 @@ class GridPage(QWidget):
         self._position_overlays()
         QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
 
+    HEAD_MARGIN = 8       # the floating header keeps the window's own border
+
+    def eventFilter(self, obj, ev):
+        if obj is self.view.viewport() and ev.type() == QEvent.Resize:
+            self._position_overlays()
+        return super().eventFilter(obj, ev)
+
     def head_height(self):
-        return self.headwrap.sizeHint().height() if hasattr(self, "headwrap") else 0
+        """What the grid has to leave free at the top, margins included."""
+        if not hasattr(self, "headwrap"):
+            return 0
+        return self.headwrap.sizeHint().height() + self.HEAD_MARGIN
 
     def _position_overlays(self, animate_selbar=False):
         if hasattr(self, "headwrap"):
-            # stop where the timeline rail starts, or the bar sits on its labels
-            gap = (self.rail.width() + 6) if self.rail.isVisible() else 0
-            self.headwrap.setGeometry(0, 0, max(120, self.width() - gap),
-                                      self.head_height())
+            # Bound to the VIEWPORT, so the bar clears the scrollbar and the
+            # timeline rail rather than lying across either of them.
+            m = self.HEAD_MARGIN
+            vp = self.view.viewport()
+            tl = vp.mapTo(self, QPoint(0, 0))
+            # Flush with the top: an inset there leaves a sliver of scrolled
+            # photo peeking over the bar, which reads as a glitch rather than
+            # as depth.
+            self.headwrap.setGeometry(tl.x() + m, 0,
+                                      max(160, vp.width() - m * 2),
+                                      self.headwrap.sizeHint().height())
             self.headwrap.raise_()
         if self.sticky.isVisible():
             self._place_sticky()
