@@ -38,18 +38,19 @@ class Glass:
         fringe along the edge of real glass. Without any of this the edge is
         just where a blur stops.
 
-    Three things keep that affordable, and they matter more than the average
+    Two things keep that affordable, and they matter more than the average
     cost: what stutters is a burst on one frame in five, not a steady tax.
 
-      * THE WHOLE PIPELINE RUNS AT 1/K. The sample is rasterized straight into a
-        small pixmap rather than grabbed at full size and shrunk, the rim is
-        bent there too, and one upscale at the end does the blurring. Nine times
-        fewer pixels through the expensive part.
       * THE FINISHED SURFACE IS CACHED. A frame is one blit -- eight
         microseconds -- however much work went into the glass.
-      * IT ONLY REBUILDS WHEN THE BACKDROP MOVED. A panel over a grid that is
+      * IT ONLY REBUILDS WHEN THE BACKDROP MOVED. A panel over a page that is
         sitting still costs nothing at all; it used to re-sample thirty times a
         second to arrive at the same picture.
+
+    The vibrance and the rim still run on the 1/K sample, where there are K^2
+    fewer pixels. Rasterizing the sample itself at 1/K was tried too -- a third
+    cheaper -- and reverted: Qt samples each thumbnail with four taps at that
+    scale and every hard edge came back as a staircase.
     """
 
     RADIUS = 22          # roughly, in screen pixels
@@ -57,7 +58,7 @@ class Glass:
     TTL = 0.033          # seconds between rebuilds while the backdrop is moving
     IDLE_TTL = 0.6       # ...and while it is not
 
-    K = 3                # everything happens at 1/K, and that IS the blur
+    K = 2                # everything happens at 1/K, and that IS the blur
     SAT = 1.42           # saturation multiplier for the vibrance pass
     LIFT = 1.03          # and a whisper of brightness with it
     TINT_MIN, TINT_MAX = 132, 178
@@ -144,18 +145,21 @@ class Glass:
         if area.width() < 4 or area.height() < 4:
             return None, None, 0.0, Glass.K
         k = Glass.K
-        small = QPixmap(max(2, -(-area.width() // k)), max(2, -(-area.height() // k)))
-        small.fill(Qt.transparent)
         try:
-            p = QPainter(small)
-            p.setRenderHint(QPainter.SmoothPixmapTransform, True)
-            p.scale(1.0 / k, 1.0 / k)
-            p.translate(-area.x(), -area.y())
-            source.render(p, QPoint(0, 0), QRegion(area),
-                          QWidget.RenderFlag.DrawChildren)
-            p.end()
+            full = source.grab(area)
         except (RuntimeError, ValueError):
             return None, None, 0.0, k
+        if full.isNull():
+            return None, None, 0.0, k
+        # Grab at full size and shrink with a smooth transform, which is a real
+        # area average. Rasterizing straight into a 1/k pixmap is a third
+        # cheaper -- and it was, until you look at it: Qt samples each thumbnail
+        # with four taps at a third scale, which aliases every hard edge into
+        # a staircase. The saving is not worth what is behind the glass turning
+        # to gravel.
+        small = full.scaled(max(2, -(-area.width() // k)),
+                            max(2, -(-area.height() // k)),
+                            Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         luma = Glass._luma(small)
         small = Glass._vibrance(small)
         off = QPoint(area.x() - top_left.x(), area.y() - top_left.y())
@@ -309,9 +313,12 @@ class Glass:
         r = QRectF(0, 0, w, h)
         path = QPainterPath()
         path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
+        # scaled(), not drawPixmap(rect, ...): the painter's bilinear upscale
+        # leaves the sample in visible blocks, the smooth transform does not
+        big = lens.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         p.save()
         p.setClipPath(path)
-        p.drawPixmap(r, lens, QRectF(0, 0, w / k, h / k))
+        p.drawPixmap(0, 0, big)
         base = QColor(tint or style.PAL["surface2"])
         base.setAlpha(Glass.tint_alpha(luma) if tint_alpha is None else tint_alpha)
         p.fillRect(r, base)
