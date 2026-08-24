@@ -25,9 +25,14 @@ class Glass:
 
     The look follows Mixtape's Glass.cs. What separates glass from fog:
 
-      * a LIGHT blur. Halving the sample five times -- a 1/32 smear -- reads as
-        frosted bathroom glass. Liquid glass is sharp: you can still make out
-        what is behind it.
+      * a LIGHT blur, and a REAL one. Halving the sample five times -- a 1/32
+        smear -- reads as frosted bathroom glass. Liquid glass is sharp: you
+        can still make out what is behind it. Halving it once and doubling it
+        back was cheap, but it was not a blur: it is a flat-topped four-tap box
+        whose SHAPE depends on where content lands inside its 2x2 cell, so it
+        drops the one-pixel detail that a Gaussian of the same softness keeps,
+        and every pixel of the backdrop remutates as the grid scrolls under it.
+        _blur does the real convolution instead, at full size, out of blits.
       * a VIBRANCE pass, so the colours behind push through the tint instead of
         greying out under it.
       * a TINT that is mostly transparent, and only thickens over a bright
@@ -47,10 +52,14 @@ class Glass:
         sitting still costs nothing at all; it used to re-sample thirty times a
         second to arrive at the same picture.
 
-    The vibrance and the rim still run on the 1/K sample, where there are K^2
-    fewer pixels. Rasterizing the sample itself at 1/K was tried too -- a third
-    cheaper -- and reverted: Qt samples each thumbnail with four taps at that
-    scale and every hard edge came back as a staircase.
+    Nothing runs at 1/K any more, because K is 1: the vibrance and the rim both
+    cover four times the pixels they used to. That is paid for twice over --
+    once by collapsing the vibrance into a single colour matrix, once by taking
+    three whole copies of the sample out of the rim -- and it still lands at
+    about 1.4x the old rebuild on the header. Rasterizing the sample at 1/K
+    rather than grabbing and shrinking was tried too, back when there was a 1/K
+    sample -- a third cheaper -- and reverted: Qt sampled each thumbnail with
+    four taps at that scale and every hard edge came back as a staircase.
     """
 
     RADIUS = 22          # roughly, in screen pixels
@@ -58,7 +67,9 @@ class Glass:
     TTL = 0.033          # seconds between rebuilds while the backdrop is moving
     IDLE_TTL = 0.6       # ...and while it is not
 
-    K = 2                # everything happens at 1/K, and that IS the blur
+    K = 1                # 1 = the sample is kept at full size and really blurred
+    SIGMA = 0.6          # ...by this much. The whole blur, in one number.
+    TAPS = 2             # kernel half-width: 2 covers SIGMA up to about 1.1
     SAT = 1.42           # saturation multiplier for the vibrance pass
     LIFT = 1.03          # and a whisper of brightness with it
     TINT_MIN, TINT_MAX = 132, 178
@@ -76,27 +87,138 @@ class Glass:
 
     # ------------------------------------------------------------- sampling
     @staticmethod
+    def _flatten(pm):
+        """The sample composited onto black, so the blur can average it.
+
+        The glass source is a viewport styled `background: transparent`, so its
+        grab comes back ARGB32 with holes where the gutters between thumbnails
+        are. Source-over weights by opacity TIMES the source's own alpha, which
+        means a transparent tap contributes nothing at all rather than pulling
+        the average down: the blur would dilate every opaque edge by a pixel and
+        leave the gutters hard. The rim already lands the lens on opaque black a
+        few steps further down, so this is the same picture, taken one step
+        earlier -- where it makes the arithmetic work.
+        """
+        if not pm.hasAlphaChannel():
+            return pm
+        flat = QPixmap(pm.size())
+        flat.fill(Qt.black)
+        p = QPainter(flat)
+        p.drawPixmap(0, 0, pm)
+        p.end()
+        return flat
+
+    @staticmethod
+    def _taps():
+        """Gaussian weights for the offsets -TAPS .. +TAPS, unnormalized."""
+        s = Glass.SIGMA
+        return [math.exp(-(i * i) / (2.0 * s * s))
+                for i in range(-Glass.TAPS, Glass.TAPS + 1)]
+
+    @staticmethod
+    def _axis(src, taps, vertical):
+        """One axis of a separable kernel, as offset copies of the sample.
+
+        A raster QPainter cannot ADD two images -- but source-over will AVERAGE
+        them if the opacity falls as you go. Draw the i-th tap at
+        w_i / (w_0 + ... + w_i) and once the last one is down each one weighs
+        exactly its own share of the total, to under half of an 8-bit level.
+        The obvious version, N copies at 1/N opacity each, does NOT average:
+        source-over at a constant opacity is a geometric series in which the
+        last copy drawn dominates.
+
+        HEAVIEST TAP FIRST, and it matters twice over. The first blit is the
+        only one drawn at opacity 1.0, so it has to be the centre tap at offset
+        zero -- the only one that covers the whole of an uninitialized QPixmap.
+        Draw them outward-in instead and the trailing rows come back translucent
+        over whatever was in that memory.
+        """
+        r = len(taps) // 2
+        out = QPixmap(src.size())
+        p = QPainter(out)
+        acc = 0.0
+        for i in sorted(range(len(taps)), key=lambda j: -taps[j]):
+            acc += taps[i]
+            p.setOpacity(taps[i] / acc)
+            if vertical:
+                p.drawPixmap(0, i - r, src)
+            else:
+                p.drawPixmap(i - r, 0, src)
+        p.end()
+        return out
+
+    @staticmethod
+    def _blur(pm):
+        """A real separable Gaussian, built out of nothing but drawPixmap.
+
+        2 * (2 * TAPS + 1) blits -- ten of them at TAPS=2 -- with no new
+        dependency, no shader and no QGraphicsScene. On the header sample it
+        costs 0.39 ms against the 0.11 for the old shrink plus 0.30 for its
+        matching grow-back, so the blur is not what full size costs; the rim
+        and the vibrance are.
+
+        What it buys is that it IS a convolution. A single white pixel comes
+        back 29 / 116 / 28 against an analytic 42 / 169 / 42 at the same
+        normalization, where the old resample returned a flat 31 / 64 / 31 box.
+        And a one-pixel scroll moves the result by 0.000, where the resample
+        moved it by 3.4/255 on every odd offset -- a convolution commutes with
+        a shift and a resample does not. That crawl is a good part of what read
+        as cheap about the old blur.
+        """
+        taps = Glass._taps()
+        return Glass._axis(Glass._axis(pm, taps, False), taps, True)
+
+    @staticmethod
+    def _vib_matrix():
+        """Colour and brightness collapsed into one 3x4 for Image.convert.
+
+        ImageEnhance.Color blends towards a 601-weighted greyscale and
+        ImageEnhance.Brightness scales towards black. Both are linear, so their
+        composition is a single matrix and Pillow applies it in one pass instead
+        of two -- 1.4 ms against 3.2 on a full-size header sample, which is most
+        of what pays for the sample being full size. Worst channel error against
+        the two-stage version is 2/255.
+        """
+        lr, lg, lb = 0.299, 0.587, 0.114
+        d = 1.0 - Glass.SAT
+        rows = []
+        for i in range(3):
+            row = [lr * d, lg * d, lb * d]
+            row[i] += Glass.SAT
+            rows += [c * Glass.LIFT for c in row] + [0.0]
+        return tuple(rows)
+
+    @staticmethod
     def _vibrance(pm):
         """Push the saturation of the sample, in place of a real filter.
 
-        Done on the 1/K pixmap -- a ninth of the pixels -- so this costs a fifth
-        of a millisecond even though it goes out to Pillow and back. If anything
-        about the conversion fails the sample comes back untouched: a slightly
-        flat panel is a far better outcome than a painter that raises.
+        One Pillow pass over a buffer neither side has to repack: an opaque grab
+        is already Format_RGB32, which is BGRX in memory, and Pillow's raw
+        decoder reads that straight off the constBits() memoryview -- no
+        convertToFormat, no fourth channel, no bytes() copy. If anything about
+        the conversion fails the sample comes back untouched: a slightly flat
+        panel is a far better outcome than a painter that raises.
         """
         try:
-            from PIL import Image, ImageEnhance
-            img = pm.toImage().convertToFormat(QImage.Format_RGBA8888)
+            from PIL import Image
+            img = pm.toImage()
+            if img.format() != QImage.Format_RGB32:
+                img = img.convertToFormat(QImage.Format_RGB32)
             w, h = img.width(), img.height()
             if w < 2 or h < 2:
                 return pm
-            # RGBA8888 is 4 bytes a pixel, so the row stride never needs padding
-            # and the buffer maps to Pillow one to one.
-            src = Image.frombytes("RGBA", (w, h), bytes(img.constBits()))
-            src = ImageEnhance.Color(src).enhance(Glass.SAT)
-            src = ImageEnhance.Brightness(src).enhance(Glass.LIFT)
-            out = QImage(src.tobytes(), w, h, QImage.Format_RGBA8888).copy()
-            return QPixmap.fromImage(out)
+            src = Image.frombuffer("RGB", (w, h), img.constBits(),
+                                   "raw", "BGRX", img.bytesPerLine(), 1)
+            # Out through Format_RGB888, not back through BGRX: Pillow's BGRX
+            # packer leaves the alpha byte at zero, which inspects as perfectly
+            # opaque -- hasAlphaChannel() is False and the pixels read back
+            # correct -- and then composites as NOTHING onto the transparent
+            # surfaces the rim and the finished panel are built on. RGB888
+            # writes no alpha byte at all, so Qt supplies 255, and it is the
+            # cheaper pack besides.
+            raw = src.convert("RGB", Glass._vib_matrix()).tobytes("raw", "RGB")
+            return QPixmap.fromImage(QImage(raw, w, h, w * 3,
+                                            QImage.Format_RGB888))
         except Exception:
             return pm
 
@@ -151,16 +273,31 @@ class Glass:
             return None, None, 0.0, k
         if full.isNull():
             return None, None, 0.0, k
-        # Grab at full size and shrink with a smooth transform, which is a real
-        # area average. Rasterizing straight into a 1/k pixmap is a third
-        # cheaper -- and it was, until you look at it: Qt samples each thumbnail
-        # with four taps at a third scale, which aliases every hard edge into
-        # a staircase. The saving is not worth what is behind the glass turning
-        # to gravel.
-        small = full.scaled(max(2, -(-area.width() // k)),
-                            max(2, -(-area.height() // k)),
-                            Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        luma = Glass._luma(small)
+        # The luma comes off the grab and not off the blurred sample: a blur
+        # does not move a mean, so the tint thickens by exactly what it did
+        # before, and this way it is read before _flatten drops the alpha.
+        luma = Glass._luma(full)
+        if k > 1:
+            # The escape hatch, and what shipped before: at 1/k the resample IS
+            # the blur. Grab at full size and shrink with a smooth transform,
+            # which is at least a real area average -- rasterizing straight into
+            # a 1/k pixmap is a third cheaper again, and it was, until you look
+            # at it: Qt samples each thumbnail with four taps at that scale and
+            # aliases every hard edge into a staircase.
+            small = full.scaled(max(2, -(-area.width() // k)),
+                                max(2, -(-area.height() // k)),
+                                Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        else:
+            # A grab on a scaled display comes back in DEVICE pixels, and
+            # everything below this line -- the offset, the rim's band and
+            # magnification -- is in logical ones. The old 1/K shrink papered
+            # over that by arithmetic accident (at 200%, /2 landed on exactly
+            # the logical size); without it, it has to be said out loud. This
+            # still keeps twice the detail that the old path did at 200%.
+            if full.width() != area.width():
+                full = full.scaled(area.width(), area.height(),
+                                   Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+            small = Glass._blur(Glass._flatten(full))
         small = Glass._vibrance(small)
         off = QPoint(area.x() - top_left.x(), area.y() - top_left.y())
         widget._glass_cache = (now, widget.size(), small, off, luma)
@@ -222,20 +359,32 @@ class Glass:
     @staticmethod
     def _pass(src, w, h, band, mag):
         """Both axes of the rim, into a fresh pixmap the size of `src`."""
-        mid = QPixmap(src.size())
-        mid.fill(Qt.transparent)
+        mid = Glass._copy(src)
         q = QPainter(mid)
         q.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        q.drawPixmap(0, 0, src)
         Glass._bend(q, src, w, h, band, mag, vertical=False)
         q.end()
-        out = QPixmap(src.size())
-        out.fill(Qt.transparent)
+        out = Glass._copy(mid)
         q = QPainter(out)
         q.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        q.drawPixmap(0, 0, mid)
         Glass._bend(q, mid, w, h, band, mag, vertical=True)
         q.end()
+        return out
+
+    @staticmethod
+    def _copy(src):
+        """src into a fresh pixmap, in one pass over it instead of two.
+
+        CompositionMode_Source overwrites every byte, alpha included, so the
+        fill(Qt.transparent) that used to precede the copy was a whole extra
+        pass over a full-size pixmap for nothing. There are six of these in a
+        rebuild, and at full size they are no longer small.
+        """
+        out = QPixmap(src.size())
+        p = QPainter(out)
+        p.setCompositionMode(QPainter.CompositionMode_Source)
+        p.drawPixmap(0, 0, src)
+        p.end()
         return out
 
     @staticmethod
@@ -258,15 +407,28 @@ class Glass:
         if Glass.CA <= 0.0:
             return Glass._pass(base, ws, hs, bs, ms)
 
-        out = QPixmap(base.size())
-        out.fill(Qt.black)
-        acc = QPainter(out)
-        acc.setCompositionMode(QPainter.CompositionMode_Plus)
+        # _channel used to run BEFORE the bend, which cost a whole extra copy
+        # of the base per colour. The bend is a per-channel resample, so masking
+        # after it is the same picture -- byte for byte, checked at both sizes
+        # -- and the flattening onto black that _channel also did is now done
+        # once instead of three times. The first pass doubles as the
+        # accumulator, so that is a fourth full-size pixmap saved.
+        base = Glass._channel(base, (255, 255, 255))
+        out = acc = None
         for scale, rgb in ((1.0 - Glass.CA, (255, 0, 0)),
                            (1.0, (0, 255, 0)),
                            (1.0 + Glass.CA, (0, 0, 255))):
-            acc.drawPixmap(0, 0, Glass._pass(Glass._channel(base, rgb),
-                                             ws, hs, bs, ms * scale))
+            one = Glass._pass(base, ws, hs, bs, ms * scale)
+            q = QPainter(one)
+            q.setCompositionMode(QPainter.CompositionMode_Multiply)
+            q.fillRect(one.rect(), QColor(*rgb))
+            q.end()
+            if out is None:
+                out = one
+                acc = QPainter(out)
+                acc.setCompositionMode(QPainter.CompositionMode_Plus)
+            else:
+                acc.drawPixmap(0, 0, one)
         acc.end()
         return out
 
@@ -313,9 +475,12 @@ class Glass:
         r = QRectF(0, 0, w, h)
         path = QPainterPath()
         path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
-        # scaled(), not drawPixmap(rect, ...): the painter's bilinear upscale
-        # leaves the sample in visible blocks, the smooth transform does not
-        big = lens.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+        # At K=1 the lens is already panel-sized and this is a no-op; the call
+        # stays so that putting K back to 2 still works. scaled(), and not
+        # drawPixmap(rect, ...): the painter's bilinear upscale leaves the
+        # sample in visible blocks, the smooth transform does not.
+        big = lens if lens.size() == QSize(w, h) else \
+            lens.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
         p.save()
         p.setClipPath(path)
         p.drawPixmap(0, 0, big)

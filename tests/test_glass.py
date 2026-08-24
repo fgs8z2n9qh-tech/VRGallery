@@ -57,8 +57,13 @@ def panel(app):
 # ------------------------------------------------------------------ the look
 
 def test_the_blur_is_light_enough_to_still_see_through(panel):
-    """A 1/32 smear reads as frosted bathroom glass, not as glass."""
-    assert Glass.K <= 4, "the sample is being thrown away"
+    """A 1/32 smear reads as frosted bathroom glass, not as glass.
+
+    Asserting on K went vacuous when K became 1 and the blur became a real
+    convolution; sigma is the knob now, and it is the only one.
+    """
+    assert 0.3 <= Glass.SIGMA <= 1.2, "past this it stops being glass"
+    assert Glass.K == 1, "the sample is being thrown away before it is blurred"
 
 
 def test_the_tint_thickens_over_a_bright_backdrop_and_not_otherwise(panel):
@@ -180,15 +185,59 @@ def test_the_stamp_reaches_the_glass_from_the_scrollbar(app):
     assert head.bar._stamp != before, "scrolling did not invalidate the glass"
 
 
-def test_the_sample_is_taken_at_reduced_size(panel):
-    """Rasterizing straight into a small pixmap is a third cheaper than
-    grabbing at full size and shrinking, and the blur wanted it small anyway."""
+def test_the_sample_reaches_past_the_panel_and_is_kept_whole(panel):
+    """It used to be shrunk, and the shrink WAS the blur. Now it is blurred."""
     _host, source, bar = panel
     bar._glass_cache = None
     small, _off, _luma, k = Glass.sample(bar, source)
     assert k == Glass.K
     assert small.width() * k <= bar.width() + 2 * Glass.MARGIN + k
-    assert small.width() < bar.width(), "the sample was taken at full size"
+    assert small.width() >= bar.width(), "the rim has nothing to bend"
+    taps = Glass._taps()
+    assert len(taps) == 2 * Glass.TAPS + 1
+    assert taps[Glass.TAPS] == max(taps), "the centre tap must be drawn first"
+    assert taps == taps[::-1], "the kernel is not symmetric"
+
+
+def _blur_of(img_maker, dx):
+    """Blur a plate whose content sits dx pixels over. -> QImage"""
+    from PySide6.QtGui import QPainter, QPixmap
+    pm = QPixmap(160, 64)
+    pm.fill(Qt.black)
+    p = QPainter(pm)
+    img_maker(p, dx)
+    p.end()
+    return Glass._blur(pm).toImage()
+
+
+def test_the_blur_does_not_crawl_when_the_backdrop_moves(app):
+    """The point of a real convolution, and the thing the resample got wrong.
+
+    A convolution commutes with a shift: blur-then-move and move-then-blur give
+    the same picture. A downsample does not -- its output depends on where the
+    content lands inside the 2x2 cell it averages, so every pixel of the
+    backdrop remutated as the grid scrolled under it. That crawl measured
+    3.4/255 on every odd offset and is a good part of what read as cheap.
+    """
+    def plate(p, dx):
+        for x in range(0, 160, 4):
+            p.fillRect(x + dx, 0, 2, 64, QColor(240, 230, 200))
+
+    # An ODD offset, and that is the whole test: a resample only misbehaves
+    # when the content lands on a different phase inside the 2x2 cell it
+    # averages, so shifting by a whole number of cells hides the defect
+    # completely. Shifting by 8 passes against the old blur.
+    shift = 1
+    a = _blur_of(plate, 0)
+    b = _blur_of(plate, shift)
+    worst = 0
+    for y in range(8, 56, 7):              # compare the interior, away from the ends
+        for x in range(20, 120, 3):
+            ca = QColor(a.pixel(x, y))
+            cb = QColor(b.pixel(x + shift, y))
+            worst = max(worst, abs(ca.red() - cb.red()),
+                        abs(ca.green() - cb.green()), abs(ca.blue() - cb.blue()))
+    assert worst == 0, f"the backdrop crawls by {worst}/255 as it scrolls"
 
 
 def test_the_rim_never_samples_past_what_was_captured(panel):
