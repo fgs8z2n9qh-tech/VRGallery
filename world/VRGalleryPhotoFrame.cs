@@ -1,4 +1,4 @@
-// VRChronicle — in-world photo frame
+// VRGallery — in-world photo frame
 //
 // Downloads one image from a public https URL and shows it on a quad, then
 // refreshes on an interval so a newly published photo appears without a rebuild.
@@ -27,7 +27,7 @@ using VRC.SDKBase;
 using VRC.Udon.Common.Interfaces;
 
 [UdonBehaviourSyncMode(BehaviourSyncMode.None)]
-public class VRChroniclePhotoFrame : UdonSharpBehaviour
+public class VRGalleryPhotoFrame : UdonSharpBehaviour
 {
     [Tooltip("Public https URL of the published frame image (frame.jpg).")]
     public VRCUrl imageUrl = new VRCUrl("");
@@ -84,7 +84,7 @@ public class VRChroniclePhotoFrame : UdonSharpBehaviour
     public override void OnImageLoadError(IVRCImageDownload result)
     {
         _downloading = false;
-        Debug.LogWarning("[VRChronicle] frame download failed: " + result.ErrorMessage);
+        Debug.LogWarning("[VRGallery] frame download failed: " + result.ErrorMessage);
         if (fallbackTexture != null)
         {
             _Apply(fallbackTexture);

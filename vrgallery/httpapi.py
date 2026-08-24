@@ -27,7 +27,7 @@ class ApiSignals(QObject):
 
 
 class _Handler(BaseHTTPRequestHandler):
-    server_version = "VRChronicle"
+    server_version = "VRGallery"
     sys_version = ""
 
     # --- plumbing ---
@@ -118,7 +118,7 @@ class LocalApi:
         self.port = int(port)
         self.token = token
         self._thread = threading.Thread(target=srv.serve_forever, kwargs={"poll_interval": 0.4},
-                                        name="vrchronicle-api", daemon=True)
+                                        name="vrgallery-api", daemon=True)
         self._thread.start()
         return True
 

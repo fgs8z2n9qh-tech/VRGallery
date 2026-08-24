@@ -1,15 +1,15 @@
-VRChronicle — VRChat photo album
+VR Gallery — VRChat photo album
 ================================
 
 Install:
-  Run "Install VRChronicle.cmd". It copies the app to
-  %LOCALAPPDATA%\Programs\VRChronicle and creates Desktop + Start Menu shortcuts.
+  Run "Install VR Gallery.cmd". It copies the app to
+  %LOCALAPPDATA%\Programs\VRGallery and creates Desktop + Start Menu shortcuts.
 
-  (You can also just run VRChronicle\VRChronicle.exe straight from this folder —
+  (You can also just run VRGallery\VRGallery.exe straight from this folder —
   the app is fully portable.)
 
 What it does:
-  VRChronicle indexes your VRChat screenshots (Pictures\VRChat) and works out which
+  VRGallery indexes your VRChat screenshots (Pictures\VRChat) and works out which
   world each photo was taken in, who was in the instance with you, and which avatar
   you were wearing — from VRCX metadata and from the VRChat output logs.
 
@@ -17,7 +17,7 @@ What it does:
   watch slideshows, revisit memories, render a "year in review" poster, clean up
   black shots / bursts / duplicates / huge PNGs, and share to Discord via webhook.
 
-  VRChat only keeps its last few log files, so VRChronicle copies each session into
+  VRChat only keeps its last few log files, so VR Gallery copies each session into
   its own database as it goes. Leave it running in the tray (Settings > Startup) and
   your history keeps building.
 
@@ -25,7 +25,7 @@ What it does:
   actions move files to the Recycle Bin.
 
 Data folder:
-  %LOCALAPPDATA%\VRChronicle  (database, thumbnails, settings, exports)
+  %LOCALAPPDATA%\VRGallery  (database, thumbnails, settings, exports)
 
 Uninstall:
-  Run "Uninstall VRChronicle.cmd" (also available next to the installed app).
+  Run "Uninstall VR Gallery.cmd" (also available next to the installed app).

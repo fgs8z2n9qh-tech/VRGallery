@@ -4,7 +4,7 @@ The Udon frame needs a plain `https://` URL that returns an image. If the app al
 lives in a GitHub repo, that repo can host it for free — no extra service, no account.
 
 **Publishing puts the photo on the public internet.** Anyone with the URL can see it,
-and so can everyone who visits your world. VRChronicle warns you if the photo came from
+and so can everyone who visits your world. VR Gallery warns you if the photo came from
 a friends-only or invite instance, but the decision is yours every time.
 
 ## One-time setup
@@ -15,7 +15,7 @@ a friends-only or invite instance, but the decision is yours every time.
    git switch --orphan gh-pages
    git rm -rf .
    mkdir frame
-   printf 'VRChronicle frame\n' > frame/README.txt
+   printf 'VRGallery frame\n' > frame/README.txt
    git add -A && git commit -m "frame host" && git push -u origin gh-pages
    git switch main
    ```
@@ -25,11 +25,11 @@ a friends-only or invite instance, but the decision is yours every time.
 3. Clone that branch somewhere as a working copy — this is what the app writes into:
 
    ```bash
-   git clone --branch gh-pages <your repo url> C:\vrchronicle-frame
+   git clone --branch gh-pages <your repo url> C:\vrgallery-frame
    ```
 
-4. In VRChronicle ▸ Settings ▸ **In-world frame**:
-   - **Frame folder**: `C:\vrchronicle-frame\frame`
+4. In VR Gallery ▸ Settings ▸ **In-world frame**:
+   - **Frame folder**: `C:\vrgallery-frame\frame`
    - **Publish command**:
      ```
      git add -A && git commit -m "frame" && git push

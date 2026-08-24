@@ -37,20 +37,20 @@ jobs:
       - name: Build the app
         run: |
           python -m PyInstaller --noconfirm --clean --windowed `
-            --name VRChronicle `
-            --icon assets/VRChronicle.ico `
+            --name VRGallery `
+            --icon assets/VRGallery.ico `
             --add-data "assets;assets" `
             run.py
 
       - name: Package the installer
         run: |
           New-Item -ItemType Directory -Force stage | Out-Null
-          Copy-Item dist/VRChronicle stage/VRChronicle -Recurse
-          Copy-Item "installer/Install VRChronicle.cmd" stage/
+          Copy-Item dist/VRGallery stage/VRGallery -Recurse
+          Copy-Item "installer/Install VR Gallery.cmd" stage/
           Copy-Item "installer/README.txt" stage/
-          Copy-Item "installer/Uninstall VRChronicle.cmd" stage/VRChronicle/
-          Compress-Archive -Path stage/* -DestinationPath VRChronicle-Setup.zip -CompressionLevel Optimal
-          (Get-FileHash VRChronicle-Setup.zip -Algorithm SHA256).Hash.ToLower() | Out-File sha256.txt -Encoding ascii
+          Copy-Item "installer/Uninstall VR Gallery.cmd" stage/VRGallery/
+          Compress-Archive -Path stage/* -DestinationPath VRGallery-Setup.zip -CompressionLevel Optimal
+          (Get-FileHash VRGallery-Setup.zip -Algorithm SHA256).Hash.ToLower() | Out-File sha256.txt -Encoding ascii
 
       - name: Attach to the release
         uses: softprops/action-gh-release@v2
@@ -59,6 +59,6 @@ jobs:
           # a -rc tag must never become /releases/latest for older clients
           prerelease: ${{ contains(github.event.inputs.tag || github.ref_name, '-') }}
           files: |
-            VRChronicle-Setup.zip
+            VRGallery-Setup.zip
             sha256.txt
           fail_on_unmatched_files: true

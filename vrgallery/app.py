@@ -7,10 +7,10 @@ from . import paths
 
 
 def main(argv=None):
-    ap = argparse.ArgumentParser(prog="vrchronicle")
+    ap = argparse.ArgumentParser(prog="vrgallery")
     ap.add_argument("--data-dir", metavar="DIR",
                     help="use a different library folder instead of "
-                         "%LOCALAPPDATA%\\VRChronicle")
+                         "%LOCALAPPDATA%\\VRGallery")
     ap.add_argument("--index", action="store_true", help="headless index, then exit")
     ap.add_argument("--tray", action="store_true", help="start hidden in the system tray")
     ap.add_argument("--no-index", action="store_true",
@@ -67,7 +67,7 @@ def main(argv=None):
         QMessageBox.information(None, paths.APP_NAME, paths.APP_NAME + " is already running.")
         return 0
 
-    ico_path = paths.asset(paths.APP_NAME + ".ico")
+    ico_path = paths.asset(paths.APP_SLUG + ".ico")
     if os.path.exists(ico_path):
         app.setWindowIcon(QIcon(ico_path))
     else:

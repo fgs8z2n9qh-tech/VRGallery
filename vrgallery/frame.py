@@ -1,9 +1,9 @@
 """Publish one photo to the in-world picture frame.
 
-VRChronicle never uploads anything on its own: it writes the frame image (and a
+VRGallery never uploads anything on its own: it writes the frame image (and a
 small manifest) into a folder YOU choose — a synced folder, a git working copy,
 a web root — and then optionally runs a publish command you configured. The
-Udon side of the frame lives in `world/VRChroniclePhotoFrame.cs`.
+Udon side of the frame lives in `world/VRGalleryPhotoFrame.cs`.
 """
 import json
 import os

@@ -1,4 +1,6 @@
 """Feather-style stroke icons rendered from inline SVG (crisp at any DPR)."""
+import os
+
 from PySide6.QtCore import QByteArray, QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QLinearGradient, QPainter, QPainterPath, QPixmap
 from PySide6.QtSvg import QSvgRenderer
@@ -164,7 +166,34 @@ APP_TILE_SVG = (
 )
 
 
+_LOGO_CACHE = {}
+
+
 def logo_pixmap(px, dpr=1.0, grad=None, cut=None):
+    """The app mark, from the real artwork when it is there.
+
+    The drawn tile below is the fallback: it keeps the app looking like itself
+    when the assets folder is missing (running straight from a source checkout
+    before a build, say).
+    """
+    from . import paths
+    size = max(1, int(px * dpr))
+    key = (size, round(dpr, 2))
+    hit = _LOGO_CACHE.get(key)
+    if hit is not None:
+        return hit
+    art = paths.asset(paths.APP_SLUG + "-mark.png")
+    if os.path.exists(art):
+        pm = QPixmap(art)
+        if not pm.isNull():
+            pm = pm.scaled(size, size, Qt.KeepAspectRatio, Qt.SmoothTransformation)
+            pm.setDevicePixelRatio(dpr)
+            _LOGO_CACHE[key] = pm
+            return pm
+    return _drawn_logo(px, dpr, grad, cut)
+
+
+def _drawn_logo(px, dpr=1.0, grad=None, cut=None):
     """The app tile: gradient squircle, gloss, and the chat-balloon mark."""
     from . import style
     grad = grad or style.ICON_GRAD

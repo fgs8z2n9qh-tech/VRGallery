@@ -9,8 +9,8 @@ import urllib.request
 
 from . import paths
 
-RELEASES_API = "https://api.github.com/repos/fgs8z2n9qh-tech/VRChronicle/releases/latest"
-RELEASES_PAGE = "https://github.com/fgs8z2n9qh-tech/VRChronicle/releases/latest"
+RELEASES_API = "https://api.github.com/repos/fgs8z2n9qh-tech/VRGallery/releases/latest"
+RELEASES_PAGE = "https://github.com/fgs8z2n9qh-tech/VRGallery/releases/latest"
 
 
 def _parts(version):

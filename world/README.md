@@ -2,12 +2,12 @@
 
 Two halves:
 
-1. **VRChronicle side** — Settings ▸ *In-world frame*: pick a **frame folder** and
+1. **VR Gallery side** — Settings ▸ *In-world frame*: pick a **frame folder** and
    (optionally) a **publish command**. Then right-click any photo ▸ *Send to world frame*.
    The app writes `frame.jpg` + `frame.json` into that folder and runs your command.
-   **VRChronicle never uploads anything by itself** — the folder and the command are yours.
+   **VR Gallery never uploads anything by itself** — the folder and the command are yours.
 
-2. **Unity side** — `VRChroniclePhotoFrame.cs` (UdonSharp) downloads that published
+2. **Unity side** — `VRGalleryPhotoFrame.cs` (UdonSharp) downloads that published
    image and shows it on a quad, refreshing on an interval.
 
 ## Getting a public https URL
@@ -28,10 +28,10 @@ anyone in the world can see it. Only publish photos you are happy to make public
 
 ## Unity setup (this project: Unity 2022.3.22f1, Worlds SDK 3.10.4, Built-in RP)
 
-1. Copy `VRChroniclePhotoFrame.cs` into `Assets\_Project\PhotoFrame\`.
+1. Copy `VRGalleryPhotoFrame.cs` into `Assets\_Project\PhotoFrame\`.
 2. Create a Quad, scale `2.88 × 1.62 × 1` (16:9 — same as the world's ProTV screen).
 3. Material: **Unlit/Texture** (Built-in RP — the project has URP installed but *not* active).
-4. Add the `VRChroniclePhotoFrame` component; assign `targetRenderer` (the quad) and
+4. Add the `VRGalleryPhotoFrame` component; assign `targetRenderer` (the quad) and
    optionally `fallbackTexture`.
 5. Paste your URL into `imageUrl`, set `refreshSeconds` (300 is a good default; 0 = once).
 

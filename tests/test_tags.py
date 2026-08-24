@@ -1,7 +1,7 @@
 """People tagged in the frame: boxes, not points, and stable across zoom."""
 import pytest
 
-from vrchronicle.db import Database
+from vrgallery.db import Database
 
 
 def test_a_tag_stores_a_box(tmp_path):
@@ -65,7 +65,7 @@ def view():
     os.environ["QT_QPA_PLATFORM"] = "offscreen"
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QApplication
-    from vrchronicle.lightbox import ImageView
+    from vrgallery.lightbox import ImageView
 
     QApplication.instance() or QApplication([])
     v = ImageView()

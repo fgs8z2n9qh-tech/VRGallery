@@ -33,7 +33,7 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-from vrchronicle import paths
+from vrgallery import paths
 
 FIRST = ["Nova", "Pixel", "Juniper", "Echo", "Marlow", "Bramble", "Cinder", "Wren",
          "Quill", "Sable", "Tumble", "Vesper", "Onyx", "Pepper", "Rune", "Willow",
@@ -47,7 +47,7 @@ AV_NOUN = ["Fox", "Otter", "Lynx", "Wolf", "Dragon", "Raccoon", "Hare", "Sparrow
            "Tiger", "Deer", "Corgi", "Serval"]
 
 
-def alias(name, seed="vrchronicle-demo"):
+def alias(name, seed="vrgallery-demo"):
     """Stable pseudonym: the same input always yields the same fake name."""
     h = hashlib.sha1((seed + "|" + name).encode("utf-8", "replace")).digest()
     return FIRST[h[0] % len(FIRST)] + SUFFIX[h[1] % len(SUFFIX)] + (
@@ -163,7 +163,7 @@ def swap_in_scenes(con, photo_dir, out_dir, count):
     duplicate groups (a real, interesting property of the library) would
     collapse into one meaningless pile.
     """
-    from vrchronicle import imaging
+    from vrgallery import imaging
 
     os.makedirs(photo_dir, exist_ok=True)
     thumb_dir = os.path.join(out_dir, "thumbs")
@@ -223,7 +223,7 @@ def swap_in_scenes(con, photo_dir, out_dir, count):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--out", default=os.path.join(os.environ.get("TEMP", "."),
-                                                  "vrchronicle-demo"))
+                                                  "vrgallery-demo"))
     ap.add_argument("--scenes", type=int, default=64,
                     help="how many generated scenes to spread over the library")
     ap.add_argument("--keep-photos", action="store_true",
@@ -237,7 +237,7 @@ def main():
     out = os.path.abspath(a.out)
     if os.path.isdir(out):
         # only ever remove a folder we made ourselves
-        if not os.path.exists(os.path.join(out, ".vrchronicle-demo")):
+        if not os.path.exists(os.path.join(out, ".vrgallery-demo")):
             print("refusing to touch", out, "- not a demo folder")
             return 1
         thumbs = os.path.join(out, "thumbs")
@@ -245,13 +245,13 @@ def main():
             subprocess.run(["cmd", "/c", "rmdir", thumbs], capture_output=True)
         shutil.rmtree(out, ignore_errors=True)
     os.makedirs(out, exist_ok=True)
-    open(os.path.join(out, ".vrchronicle-demo"), "w").close()
+    open(os.path.join(out, ".vrgallery-demo"), "w").close()
 
     # a checkpointed copy, so nothing is left in the WAL
     con = sqlite3.connect(src_db)
     con.execute("PRAGMA wal_checkpoint(TRUNCATE)")
     con.close()
-    dst_db = os.path.join(out, "vrchronicle.db")
+    dst_db = os.path.join(out, "vrgallery.db")
     shutil.copy2(src_db, dst_db)
 
     if a.keep_photos:

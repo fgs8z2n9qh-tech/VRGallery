@@ -3,18 +3,21 @@ import os
 import sys
 import faulthandler
 
-APP_NAME = "VRChronicle"
+APP_NAME = "VR Gallery"             # what a person reads
+APP_SLUG = "VRGallery"              # what a folder, a file or an id is called
 APP_TAGLINE = "VRChat photo album"
-APP_ID = "VRChronicle.Desktop"      # AppUserModelID: taskbar grouping identity
-APP_VERSION = "1.10.2"
-_LEGACY_NAMES = ("Aperture",)     # data dirs from before the rename
+APP_ID = "VRGallery.Desktop"        # AppUserModelID: taskbar grouping identity
+APP_VERSION = "2.0.0"
+_LEGACY_NAMES = ("VRChronicle", "Aperture")   # data dirs from earlier names
+_LEGACY_DBS = ("vrchronicle.db", "aperture.db")
+DB_NAME = "vrgallery.db"
 
-APPDIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_NAME)
+APPDIR = os.path.join(os.environ.get("LOCALAPPDATA", os.path.expanduser("~")), APP_SLUG)
 THUMB_DIR = os.path.join(APPDIR, "thumbs")
-DB_PATH = os.path.join(APPDIR, "vrchronicle.db")
+DB_PATH = os.path.join(APPDIR, DB_NAME)
 CONFIG_PATH = os.path.join(APPDIR, "config.json")
 CRASH_LOG = os.path.join(APPDIR, "crash.log")
-LOCK_PATH = os.path.join(APPDIR, "vrchronicle.lock")
+LOCK_PATH = os.path.join(APPDIR, "vrgallery.lock")
 EXPORT_DIR = os.path.join(APPDIR, "exports")
 
 _crash_fh = None
@@ -30,24 +33,24 @@ def set_appdir(directory):
     global APPDIR, THUMB_DIR, DB_PATH, CONFIG_PATH, CRASH_LOG, LOCK_PATH, EXPORT_DIR
     APPDIR = os.path.abspath(directory)
     THUMB_DIR = os.path.join(APPDIR, "thumbs")
-    DB_PATH = os.path.join(APPDIR, "vrchronicle.db")
+    DB_PATH = os.path.join(APPDIR, DB_NAME)
     CONFIG_PATH = os.path.join(APPDIR, "config.json")
     CRASH_LOG = os.path.join(APPDIR, "crash.log")
-    LOCK_PATH = os.path.join(APPDIR, "vrchronicle.lock")
+    LOCK_PATH = os.path.join(APPDIR, "vrgallery.lock")
     EXPORT_DIR = os.path.join(APPDIR, "exports")
 
 
 def is_default_appdir():
     base = os.environ.get("LOCALAPPDATA", os.path.expanduser("~"))
-    return os.path.normcase(APPDIR) == os.path.normcase(os.path.join(base, APP_NAME))
+    return os.path.normcase(APPDIR) == os.path.normcase(os.path.join(base, APP_SLUG))
 
 
 def migrate_legacy_appdir():
-    """Adopt the data folder from a previous name (Aperture -> VRChronicle).
+    """Adopt the data folder from a previous name (Aperture, VRChronicle).
 
-    Only ever moves when the new folder does not exist yet, so a real
-    VRChronicle library is never touched. Best-effort: on failure we simply
-    start with an empty library and reindex.
+    Only ever moves when the new folder does not exist yet, so a library that
+    already belongs to this name is never touched. Best-effort: on failure we
+    simply start with an empty library and reindex.
     """
     if os.path.isdir(APPDIR) or not is_default_appdir():
         return False
@@ -60,15 +63,39 @@ def migrate_legacy_appdir():
             os.rename(old, APPDIR)
         except OSError:
             return False
-        # the database file carried the old product name too
-        for legacy_db in ("aperture.db", "aperture.db-wal", "aperture.db-shm"):
-            src = os.path.join(APPDIR, legacy_db)
+        # the database file carried the old product name too, and WAL/SHM
+        # travel with it or sqlite treats the database as damaged
+        for legacy in _LEGACY_DBS:
+            for suffix in ("", "-wal", "-shm"):
+                src = os.path.join(APPDIR, legacy + suffix)
+                if os.path.exists(src):
+                    try:
+                        os.replace(src, os.path.join(APPDIR, DB_NAME + suffix))
+                    except OSError:
+                        pass
+        return True
+    return False
+
+
+def adopt_legacy_db():
+    """Take on a database written under an earlier name, in place.
+
+    Separate from the folder move, which only ever touches the real library:
+    a copy opened with --data-dir has the old file name inside it too, and
+    without this it looks like an empty library.
+    """
+    if os.path.exists(DB_PATH) or not os.path.isdir(APPDIR):
+        return False
+    for legacy in _LEGACY_DBS:
+        if not os.path.exists(os.path.join(APPDIR, legacy)):
+            continue
+        for suffix in ("", "-wal", "-shm"):
+            src = os.path.join(APPDIR, legacy + suffix)
             if os.path.exists(src):
-                dst = os.path.join(APPDIR, legacy_db.replace("aperture.db", "vrchronicle.db"))
                 try:
-                    os.replace(src, dst)
+                    os.replace(src, os.path.join(APPDIR, DB_NAME + suffix))
                 except OSError:
-                    pass
+                    return False
         return True
     return False
 
@@ -77,6 +104,7 @@ def ensure_dirs():
     migrate_legacy_appdir()
     os.makedirs(APPDIR, exist_ok=True)
     os.makedirs(THUMB_DIR, exist_ok=True)
+    adopt_legacy_db()
 
 
 def enable_crash_log():

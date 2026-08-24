@@ -1,7 +1,8 @@
-# VRChronicle onedir build (PyInstaller) + Desktop shortcut.
+# VRGallery onedir build (PyInstaller) + Desktop shortcut.
 $root = $PSScriptRoot
 $py = Join-Path $root ".venv\Scripts\python.exe"
-$name = "VRChronicle"
+$name = "VRGallery"          # exe + folder
+$display = "VR Gallery"      # what the shortcut is called
 
 & $py -m PyInstaller --noconfirm --clean --windowed `
     --name $name `
@@ -18,14 +19,16 @@ if (-not (Test-Path $exe)) {
     exit 1
 }
 
-# Desktop shortcut (and clean up the pre-rename one)
+# Desktop shortcut (and clean up the ones earlier names left behind)
 $ws = New-Object -ComObject WScript.Shell
-$old = [IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), "Aperture.lnk")
-if (Test-Path $old) { Remove-Item $old -Force }
-$lnk = $ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), "$name.lnk"))
+foreach ($s in @("Aperture.lnk", "VRChronicle.lnk", "VRGallery.lnk")) {
+    $p = [IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), $s)
+    if (Test-Path $p) { Remove-Item $p -Force }
+}
+$lnk = $ws.CreateShortcut([IO.Path]::Combine([Environment]::GetFolderPath("Desktop"), "$display.lnk"))
 $lnk.TargetPath = $exe
 $lnk.WorkingDirectory = (Join-Path $root "dist\$name")
 $lnk.IconLocation = (Join-Path $root "assets\$name.ico")
 $lnk.Description = "VRChat photo album"
 $lnk.Save()
-Write-Host "OK: dist\$name\$name.exe + Desktop\$name.lnk"
+Write-Host "OK: dist\$name\$name.exe + Desktop\$display.lnk"

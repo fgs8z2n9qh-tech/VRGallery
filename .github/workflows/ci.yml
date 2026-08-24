@@ -27,4 +27,4 @@ jobs:
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          python -c "import pkgutil, importlib, vrchronicle; [importlib.import_module('vrchronicle.' + m.name) for m in pkgutil.iter_modules(vrchronicle.__path__)]; print('all modules import')"
+          python -c "import pkgutil, importlib, vrgallery; [importlib.import_module('vrgallery.' + m.name) for m in pkgutil.iter_modules(vrgallery.__path__)]; print('all modules import')"

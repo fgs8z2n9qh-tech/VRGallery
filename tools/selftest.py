@@ -8,10 +8,10 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from PySide6.QtCore import QCoreApplication
 
-from vrchronicle import db as adb, scanner
-from vrchronicle.config import Config
+from vrgallery import db as adb, scanner
+from vrgallery.config import Config
 
-SCRATCH = os.path.join(os.environ.get("TEMP", "."), "vrchronicle_selftest.db")
+SCRATCH = os.path.join(os.environ.get("TEMP", "."), "vrgallery_selftest.db")
 for suffix in ("", "-wal", "-shm"):
     p = SCRATCH + suffix
     if os.path.exists(p):

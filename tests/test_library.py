@@ -4,8 +4,8 @@ from datetime import datetime, timedelta
 
 import pytest
 
-from vrchronicle import fmt, imaging, moments
-from vrchronicle.db import Database, PhotoFilter
+from vrgallery import fmt, imaging, moments
+from vrgallery.db import Database, PhotoFilter
 
 
 # ---------------------------------------------------------------- filenames

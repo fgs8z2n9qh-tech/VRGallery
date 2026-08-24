@@ -13,8 +13,8 @@ from PySide6.QtWidgets import QApplication
 
 from PySide6.QtCore import QPoint
 
-from vrchronicle import paths
-from vrchronicle.gridmodel import KIND_PHOTO as KIND_PHOTO_KIND
+from vrgallery import paths
+from vrgallery.gridmodel import KIND_PHOTO as KIND_PHOTO_KIND
 
 
 @pytest.fixture(scope="module")
@@ -27,9 +27,9 @@ def app():
 def window(app, tmp_path, monkeypatch):
     paths.set_appdir(str(tmp_path / "lib"))
     paths.ensure_dirs()
-    from vrchronicle.config import Config
-    from vrchronicle.db import Database
-    from vrchronicle.mainwindow import MainWindow
+    from vrgallery.config import Config
+    from vrgallery.db import Database
+    from vrgallery.mainwindow import MainWindow
 
     cfg = Config()
     cfg.set("onboarded", True, save=False)
@@ -82,7 +82,7 @@ def test_the_new_album_card_is_clickable_when_there_are_no_albums(window):
 
     ix = page.model.index(0, 0)
     assert ix.isValid()
-    from vrchronicle.pages import CardRole
+    from vrgallery.pages import CardRole
     assert ix.data(CardRole)["kind"] == "new"
 
     # A real click, hit-tested through whatever is layered over the view --
@@ -309,7 +309,7 @@ def test_the_day_header_sticks_only_once_you_have_scrolled_past_it(window, app):
     # it is the grid's own day header frozen, so it spans the viewport and
     # keeps that row's left inset rather than being indented like a card
     assert page.sticky.width() == page.view.viewport().width()
-    from vrchronicle.gridmodel import KIND_HEADER, KindRole
+    from vrgallery.gridmodel import KIND_HEADER, KindRole
     for r in range(page.model.rowCount()):
         ix = page.model.index(r, 0)
         if ix.data(KindRole) == KIND_HEADER:
@@ -333,8 +333,8 @@ def test_the_grid_scrolls_under_the_floating_header(window, app):
     """
     from PySide6.QtCore import QPoint
     from PySide6.QtTest import QTest
-    from vrchronicle.gridmodel import KIND_SPACER, KindRole
-    from vrchronicle.widgets import Glass
+    from vrgallery.gridmodel import KIND_SPACER, KindRole
+    from vrgallery.widgets import Glass
 
     _many_photos(window.db)
     window.resize(1200, 820)
@@ -421,7 +421,7 @@ def test_the_header_shrinks_once_you_are_scrolled_in(window, app):
 def test_all_shows_one_continuous_sheet_of_photos(window, app):
     """No day headings, square tiles, and the row divided exactly."""
     from PySide6.QtTest import QTest
-    from vrchronicle.gridmodel import KIND_HEADER, KIND_PHOTO, KindRole
+    from vrgallery.gridmodel import KIND_HEADER, KIND_PHOTO, KindRole
 
     rows = _many_photos(window.db)
     window.resize(1200, 820)
@@ -463,7 +463,7 @@ def test_all_shows_one_continuous_sheet_of_photos(window, app):
 def test_scrolling_does_not_redo_work_it_can_keep(window, app):
     """Both of these ran on every frame and neither changes between frames."""
     from PySide6.QtTest import QTest
-    from vrchronicle.widgets import Glass
+    from vrgallery.widgets import Glass
 
     _many_photos(window.db)
     window.resize(1200, 820)
@@ -591,7 +591,7 @@ def test_the_floating_panels_render_their_glass(window, app):
     """
     from PySide6.QtGui import QPixmap
     from PySide6.QtTest import QTest
-    from vrchronicle.widgets import Glass
+    from vrgallery.widgets import Glass
 
     _many_photos(window.db)
     window.resize(1200, 820)
@@ -682,7 +682,7 @@ def test_the_window_wears_its_own_chrome(window, app):
 
 
 def test_browsing_zooms_from_years_to_months_to_days(window, app):
-    from vrchronicle.gridmodel import KIND_PERIOD, ItemRole, KindRole
+    from vrgallery.gridmodel import KIND_PERIOD, ItemRole, KindRole
 
     rows = []
     for year in (2024, 2025):

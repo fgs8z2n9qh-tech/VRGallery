@@ -15,7 +15,7 @@ def send_photo(url, path, caption):
         return False, "File not found."
     up_path, temp = imaging.shrink_for_upload(path)
     try:
-        boundary = "----vrchronicle" + uuid.uuid4().hex
+        boundary = "----vrgallery" + uuid.uuid4().hex
         payload = {"content": caption or ""}
         with open(up_path, "rb") as f:
             file_bytes = f.read()
@@ -34,7 +34,7 @@ def send_photo(url, path, caption):
         body = b"".join(parts)
         req = urllib.request.Request(url, data=body, method="POST", headers={
             "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "VRChronicle/1.1",
+            "User-Agent": "VRGallery/1.1",
         })
         with urllib.request.urlopen(req, timeout=20) as resp:
             if 200 <= resp.status < 300:

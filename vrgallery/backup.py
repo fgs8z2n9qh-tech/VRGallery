@@ -8,7 +8,7 @@ import os
 import shutil
 import time
 
-MANIFEST = "vrchronicle-backup.txt"
+MANIFEST = "vrgallery-backup.txt"
 
 
 def _digest(path, chunk=1 << 20):

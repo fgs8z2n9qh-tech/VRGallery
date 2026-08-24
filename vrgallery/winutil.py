@@ -110,7 +110,7 @@ def restore_from_recycle_bin(paths_list):
     if not os.path.exists(ps):
         return already, todo
 
-    tmpdir = tempfile.mkdtemp(prefix="vrchronicle-restore-")
+    tmpdir = tempfile.mkdtemp(prefix="vrgallery-restore-")
     list_path = os.path.join(tmpdir, "targets.txt")
     script_path = os.path.join(tmpdir, "restore.ps1")
     try:
@@ -175,7 +175,7 @@ def round_corners(hwnd, on=True):
         pass
 
 
-def set_app_id(app_id="VRChronicle.Desktop"):
+def set_app_id(app_id="VRGallery.Desktop"):
     try:
         ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(app_id)
     except Exception:

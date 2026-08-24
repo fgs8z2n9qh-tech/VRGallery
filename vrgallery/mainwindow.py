@@ -1082,7 +1082,7 @@ class MainWindow(QMainWindow):
             if os.path.exists(side):
                 try:
                     with open(side, "r", encoding="utf-8", errors="replace") as f:
-                        if f'x:xmptk="{paths.APP_NAME}' not in f.read(2048):
+                        if not export._ours(f.read(2048)):
                             foreign += 1
                 except OSError:
                     pass

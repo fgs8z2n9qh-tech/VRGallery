@@ -127,6 +127,12 @@ def _xml_escape(s):
             .replace(">", "&gt;").replace('"', "&quot;"))
 
 
+def _ours(head):
+    """Did we write this sidecar? Earlier releases signed it with older names."""
+    return any(f'x:xmptk="{n}' in head
+               for n in (paths.APP_NAME, "VRGallery", "VRChronicle", "Aperture"))
+
+
 def xmp_sidecar(photo_path, world, taken_at, people, avatar="", instance_type="",
                 on_existing="backup"):
     """Write photo.xmp next to the original so Bridge/Lightroom/darktable can read
@@ -174,7 +180,7 @@ def xmp_sidecar(photo_path, world, taken_at, people, avatar="", instance_type=""
                 head = f.read(2048)
         except OSError:
             head = ""
-        if f'x:xmptk="{paths.APP_NAME}' not in head:      # somebody else's work
+        if not _ours(head):                              # somebody else's work
             if on_existing == "skip":
                 return None
             shutil.copy2(out, f"{out}.bak-{time.strftime('%Y%m%d-%H%M%S')}")

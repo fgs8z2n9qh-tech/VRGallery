@@ -1,7 +1,7 @@
 """Log parsing: the layer everything else in the app is built on top of."""
 from datetime import datetime
 
-from vrchronicle import vrclog
+from vrgallery import vrclog
 
 ISO = "%Y-%m-%dT%H:%M:%S"
 

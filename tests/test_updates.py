@@ -1,6 +1,6 @@
 """Which published release counts as newer than the running build."""
-from vrchronicle import paths
-from vrchronicle.updates import is_newer
+from vrgallery import paths
+from vrgallery.updates import is_newer
 
 
 def test_a_higher_release_is_newer():
@@ -31,5 +31,5 @@ def test_nonsense_tags_never_look_newer():
 
 
 def test_the_package_and_the_app_agree_on_the_version():
-    import vrchronicle
-    assert vrchronicle.__version__ == paths.APP_VERSION
+    import vrgallery
+    assert vrgallery.__version__ == paths.APP_VERSION

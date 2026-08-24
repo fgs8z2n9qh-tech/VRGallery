@@ -1,4 +1,4 @@
-r"""Register VRChronicle with the user's other apps (Atlas card + Hexpad key).
+r"""Register VR Gallery with the user's other apps (Atlas card + Hexpad key).
 
 Both targets are LIVE user configs, so every write here:
   * makes a timestamped .bak first,
@@ -17,10 +17,11 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-PROJ = os.path.join(os.path.expanduser("~"), "Desktop", "project")
+HERE = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PROJ = os.path.dirname(HERE)      # ...\Desktop\project
 LOCALAPPDATA = os.environ.get("LOCALAPPDATA", "")
 APPDATA = os.environ.get("APPDATA", "")
-ICON_SRC = os.path.join(PROJ, "vrchronicle", "assets", "VRChronicle.ico")
+ICON_SRC = os.path.join(HERE, "assets", "VRGallery.ico")
 
 
 def is_running(exe_name):
@@ -64,7 +65,7 @@ def do_atlas():
         print("Atlas: assets folder not found, skipping")
         return
     if os.path.exists(ICON_SRC):
-        shutil.copy2(ICON_SRC, os.path.join(assets, "VRChronicle.ico"))
+        shutil.copy2(ICON_SRC, os.path.join(assets, "VRGallery.ico"))
         print("Atlas: icon copied into assets")
 
     if not os.path.exists(cfg_path):
@@ -79,20 +80,20 @@ def do_atlas():
     if not isinstance(apps, list):
         print("Atlas: unexpected config shape, not touching it")
         return
-    if any(a.get("id") == "vrchronicle" for a in apps):
+    if any(a.get("id") == "vrgallery" for a in apps):
         print("Atlas: already registered")
         return
     entry = {
-        "id": "vrchronicle", "name": "VRChronicle", "tag": "VRChat photo album",
-        "icon": "VRChronicle.ico", "accent": "#f472b6",
-        "target": os.path.join(PROJ, "vrchronicle", "dist", "VRChronicle", "VRChronicle.exe"),
+        "id": "vrgallery", "name": "VR Gallery", "tag": "VRChat photo album",
+        "icon": "VRGallery.ico", "accent": "#f472b6",
+        "target": os.path.join(HERE, "dist", "VRGallery", "VRGallery.exe"),
         "args": "",
-        "cwd": os.path.join(PROJ, "vrchronicle", "dist", "VRChronicle"),
-        "folder": os.path.join(PROJ, "vrchronicle"),
-        "config_dir": os.path.join(LOCALAPPDATA, "VRChronicle"),
+        "cwd": os.path.join(HERE, "dist", "VRGallery"),
+        "folder": HERE,
+        "config_dir": os.path.join(LOCALAPPDATA, "VR Gallery"),
         "match": [
-            os.path.join(PROJ, "vrchronicle", "dist", "VRChronicle", "vrchronicle.exe").lower(),
-            os.path.join(LOCALAPPDATA, "Programs", "VRChronicle", "vrchronicle.exe").lower(),
+            os.path.join(HERE, "dist", "VRGallery", "vrgallery.exe").lower(),
+            os.path.join(LOCALAPPDATA, "Programs", "VRGallery", "vrgallery.exe").lower(),
         ],
     }
     # keep VoxelWorld last, the way the source list orders it
@@ -112,7 +113,7 @@ def render_key_icon(out_path):
     """A 144px PNG of the app mark for the dock key face."""
     os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
     from PySide6.QtGui import QGuiApplication
-    from vrchronicle import icons
+    from vrgallery import icons
     app = QGuiApplication.instance() or QGuiApplication([])
     pm = icons.logo_pixmap(144, 1.0)
     os.makedirs(os.path.dirname(out_path), exist_ok=True)
@@ -154,7 +155,7 @@ def do_hexpad(api_url):
         for page, _label in all_pages(prof):
             for binding in (page.get("items") or {}).values():
                 if uses_our_url((binding or {}).get("action")):
-                    print("Hexpad: a VRChronicle key already exists")
+                    print("Hexpad: a VR Gallery key already exists")
                     return
 
     # find a free LCD key
@@ -178,7 +179,7 @@ def do_hexpad(api_url):
         return
 
     prof, page_label, items, slot = target
-    icon_path = os.path.join(APPDATA, "AjazzDock", "icons", "VRChronicle.png")
+    icon_path = os.path.join(APPDATA, "AjazzDock", "icons", "VR Gallery.png")
     icon_ok = False
     try:
         icon_ok = render_key_icon(icon_path)
@@ -204,7 +205,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--atlas", action="store_true")
     ap.add_argument("--hexpad", action="store_true")
-    ap.add_argument("--url", default="", help="the VRChronicle API URL for the Hexpad key")
+    ap.add_argument("--url", default="", help="the VR Gallery API URL for the Hexpad key")
     a = ap.parse_args()
     both = not (a.atlas or a.hexpad)
     if a.atlas or both:
@@ -212,12 +213,12 @@ def main():
     if a.hexpad or both:
         url = a.url
         if not url:
-            from vrchronicle.config import Config
+            from vrgallery.config import Config
             cfg = Config()
             token = cfg.get("api_token") or ""
             port = cfg.get("api_port") or 8770
             if not token:
-                print("Hexpad: no API token yet — start VRChronicle once, then re-run")
+                print("Hexpad: no API token yet — start VR Gallery once, then re-run")
                 return
             url = f"http://127.0.0.1:{port}/latest/discord?token={token}"
         do_hexpad(url)

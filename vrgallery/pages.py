@@ -519,7 +519,7 @@ class PersonPage(QWidget):
         nw = (b["worlds"] or 0) if b else 0
         self.t_worlds.set(fmt.count_label(nw), f"{fmt.plural(nw, 'world')} together")
 
-        # Session records only reach back as far as the logs VRChronicle has seen,
+        # Session records only reach back as far as the logs VRGallery has seen,
         # while photos go back to the start of the library — so the earliest solid
         # evidence is whichever of the two is older.
         first_photo = (b["first_at"] if b else "") or ""
@@ -1896,7 +1896,7 @@ class SettingsPage(QWidget):
             lambda on: self.main.cfg.set("frame_captioned", bool(on)))
         card_frame.vbox.addWidget(self.chk_frame_cap)
         hint_frame = QLabel(
-            "Right-click a photo ▸ “Send to world frame”. VRChronicle only writes the "
+            "Right-click a photo ▸ “Send to world frame”. VRGallery only writes the "
             "file and runs your command — it never uploads anything itself. The Udon "
             "script and setup steps are in the app's world\\ folder. Anything you "
             "publish is visible to everyone who visits the world.")
@@ -1961,7 +1961,7 @@ class SettingsPage(QWidget):
 
         # startup / tray
         card_run = widgets.Card("STARTUP")
-        self.chk_tray = QCheckBox("Closing the window keeps VRChronicle in the tray")
+        self.chk_tray = QCheckBox("Closing the window keeps VRGallery in the tray")
         self.chk_tray.setChecked(bool(self.main.cfg.get("close_to_tray")))
         self.chk_tray.toggled.connect(
             lambda on: self.main.cfg.set("close_to_tray", bool(on)))
@@ -1976,7 +1976,7 @@ class SettingsPage(QWidget):
             lambda on: self.main.cfg.set("start_minimized", bool(on)))
         card_run.vbox.addWidget(self.chk_startmin)
         hint_run = QLabel(
-            "VRChat only keeps the last few log files. While VRChronicle runs it copies "
+            "VRChat only keeps the last few log files. While VRGallery runs it copies "
             "each session into its own database, so leaving it in the tray is what keeps "
             "your world and people history complete.")
         hint_run.setWordWrap(True)
@@ -2142,7 +2142,7 @@ class SettingsPage(QWidget):
         if not dest:
             self.lab_backup.setText(
                 "Your library is irreplaceable and lives on one drive. Point this at "
-                "another one and VRChronicle will copy anything missing, verify it, "
+                "another one and VRGallery will copy anything missing, verify it, "
                 "and never delete a thing at the destination.")
             return
         last = backup.last_run(dest) if os.path.isdir(dest) else ""
@@ -2206,7 +2206,7 @@ class SettingsPage(QWidget):
         if not ok:
             self.main.toast("Could not write the autostart entry.", "err")
         elif on:
-            self.main.toast("VRChronicle will start with Windows, hidden in the tray.", "ok")
+            self.main.toast("VRGallery will start with Windows, hidden in the tray.", "ok")
         else:
             self.main.toast("Autostart removed.", "ok")
 

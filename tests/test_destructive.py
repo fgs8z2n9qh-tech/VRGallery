@@ -8,7 +8,7 @@ import os
 
 import pytest
 
-from vrchronicle import backup, export
+from vrgallery import paths, backup, export
 
 
 def _photo(path, day, size):
@@ -90,7 +90,7 @@ def test_xmp_sidecar_keeps_a_foreign_sidecar(tmp_path):
     baks = [p for p in tmp_path.iterdir() if ".xmp.bak-" in p.name]
     assert len(baks) == 1
     assert "EDITS" in baks[0].read_text(encoding="utf-8")
-    assert "VRChronicle" in side.read_text(encoding="utf-8")
+    assert paths.APP_NAME in side.read_text(encoding="utf-8")
 
 
 def test_xmp_sidecar_refreshes_its_own_without_piling_up_backups(tmp_path):

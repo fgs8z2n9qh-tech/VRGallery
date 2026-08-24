@@ -1,9 +1,9 @@
-# VRChronicle — VRChat photo album
+# VR Gallery — VRChat photo album
 
 A gallery that knows **which world** each photo was taken in and **who was there** —
 because it reads the same logs VRChat throws away.
 
-**[⬇ Download the installer](https://github.com/fgs8z2n9qh-tech/VRChronicle/releases/latest)**
+**[⬇ Download the installer](https://github.com/fgs8z2n9qh-tech/VRGallery/releases/latest)**
 · Windows 10/11, no Python needed
 
 ![The photo timeline](docs/01-photos.png)
@@ -62,7 +62,7 @@ It says what it is going to read, from where, before it reads any of it.
 2. **VRChat logs** — `%USERPROFILE%\AppData\LocalLow\VRChat\VRChat\output_log_*.txt`
    gives a session timeline (`Joining wrld_…`, `OnPlayerJoined/Left`, and
    `Switching <you> to avatar <name>`), matched against each screenshot's timestamp.
-   VRChat only keeps the last few log files, so **VRChronicle copies every session into
+   VRChat only keeps the last few log files, so **VR Gallery copies every session into
    its own database** — leave it running in the tray and the history never gets lost.
 
 ## Moments
@@ -123,7 +123,7 @@ is ever deleted permanently.
 
 ![Cleanup](docs/07-cleanup.png)
 
-**Recently deleted** lists what VRChronicle put in the Recycle Bin, with the date, and
+**Recently deleted** lists what VR Gallery put in the Recycle Bin, with the date, and
 puts any of it back where it came from. Nothing can be permanently deleted from there
 either.
 
@@ -173,7 +173,7 @@ slot).
 
 ## Data
 
-Everything stays local in `%LOCALAPPDATA%\VRChronicle\` (vrchronicle.db, thumbs\,
+Everything stays local in `%LOCALAPPDATA%\VRGallery\` (vrgallery.db, thumbs\,
 config.json, exports\, crash.log). A library from the app's previous name is adopted
 automatically on first run. Photos are only ever read — except the two Cleanup actions,
 which move files to the Recycle Bin after asking.
