@@ -215,6 +215,11 @@ class GridModel(QAbstractListModel):
     _FLAGS_NONE = Qt.NoItemFlags
     _FLAGS_INERT = Qt.ItemIsEnabled
     _FLAGS_ITEM = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
+    # A year or month card is a place to go, not a file. Leaving it draggable
+    # cost it the single click that opens it: drift ten pixels while pressing
+    # and Qt enters its drag branch, clears pressedIndex, and clicked() never
+    # fires -- so the year simply would not open, and there is no other way in.
+    _FLAGS_PERIOD = Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
     def flags(self, index):
         if not index.isValid():
@@ -224,6 +229,8 @@ class GridModel(QAbstractListModel):
             # NoItemFlags on a row inside an IconMode QListView crashes the
             # native layout; a header is enabled-but-not-selectable and works
             return self._FLAGS_INERT
+        if kind == KIND_PERIOD:
+            return self._FLAGS_PERIOD
         return self._FLAGS_ITEM
 
     def day_of_row(self, row):
@@ -765,6 +772,26 @@ class GridView(QListView):
         self.context_requested.emit(ev.globalPos(), ix)
 
     # ------------------------------------------------------------ dragging
+    def drag_order(self, items):
+        """The order the drop target receives them in: the order you see.
+
+        selected_photo_items sorts oldest-first, which every other caller wants;
+        the grid is usually newest-first, so a drop into Discord stacked the
+        attachments backwards. Sorting by model row follows whatever the sort
+        box is set to. The photo under the hand leads, so the ghost carries the
+        one that was grabbed rather than the far end of the selection.
+        """
+        model = self.model()
+        rows = getattr(model, "_by_id", None)
+        if rows:
+            items = sorted(items, key=lambda it: rows.get(it.id, 0))
+        cur = self.currentIndex()
+        if cur.isValid() and cur.data(KindRole) == KIND_PHOTO:
+            grabbed = cur.data(ItemRole)
+            if grabbed in items:
+                items = [grabbed] + [it for it in items if it is not grabbed]
+        return items
+
     def drag_payload(self, items):
         """What leaves the app when you drag photos out. -> (QMimeData, paths)
 
@@ -774,10 +801,26 @@ class GridView(QListView):
         left to drag.
         """
         import os
+        # One listing per FOLDER, not one stat per photo. A library this size
+        # lives in about forty month folders, so a select-all went from 230 ms
+        # of frozen window to 23 ms -- and on a sleeping network share the
+        # per-file version stalled for twenty-one seconds and then quietly
+        # decided every photo was missing.
+        seen = {}
         paths = []
         for it in items:
             path = getattr(it, "path", None)
-            if path and os.path.exists(path):
+            if not path:
+                continue
+            folder, name = os.path.split(path)
+            listing = seen.get(folder)
+            if listing is None:
+                try:
+                    listing = {n.lower() for n in os.listdir(folder)}
+                except OSError:
+                    listing = frozenset()
+                seen[folder] = listing
+            if name.lower() in listing:
                 paths.append(path)
         if not paths:
             return None, []
@@ -788,10 +831,17 @@ class GridView(QListView):
         return mime, paths
 
     def drag_pixmap(self, items, cache):
-        """What the cursor carries: the first thumbnail, and how many there are."""
+        """What the cursor carries: the grabbed thumbnail, and how many there are.
+
+        peek(), not get(): get() REQUESTS a thumbnail when it misses, at a
+        priority above the background sweep. Dragging a select-all queued
+        fourteen hundred jobs and pushed every on-screen thumbnail out of the
+        LRU, so the first repaint after the drop had to decode the whole
+        viewport again. The ghost wants one picture that already exists.
+        """
         first = None
         for it in items:
-            pm = cache.get(it) if cache is not None else None
+            pm = cache.peek(it.id) if cache is not None else None
             if pm is not None and not pm.isNull():
                 first = pm
                 break
@@ -837,6 +887,39 @@ class GridView(QListView):
         cfg = getattr(page, "cfg", None)
         return cfg.get("accent") if cfg is not None else style.DEFAULT_ACCENT
 
+    def mousePressEvent(self, ev):
+        """Decide here whether this gesture is allowed to become a file drag.
+
+        It has to be here rather than in startDrag, because by the time Qt calls
+        startDrag it has already cleared pressedIndex -- so refusing there loses
+        the click as well, which is how the favourite star turned into a drag on
+        a twelve-pixel wobble. Three separate ways a press must not drag:
+
+          * NOT THE LEFT BUTTON. Qt's drag branch tests buttons() != NoButton,
+            so a right-press plus a wobble started a drag, and the drag grabbed
+            the mouse, and the context menu never opened.
+          * NOT ON A PHOTO. A day header keeps ItemIsEnabled, so ctrl-pressing
+            one kept the selection, and eight pixels of movement flung every
+            selected photo into whatever was under the cursor.
+          * NOT ON THE FAVOURITE STAR, which is a 27 px target that has its own
+            click.
+        """
+        ix = self.indexAt(ev.position().toPoint())
+        may_drag = (ev.button() == Qt.LeftButton
+                    and ix.isValid()
+                    and ix.data(KindRole) == KIND_PHOTO
+                    and not self._on_star(ix, ev.position().toPoint()))
+        self._press_draggable = may_drag
+        self.setDragEnabled(may_drag)
+        super().mousePressEvent(ev)
+
+    def _on_star(self, index, pos):
+        delegate = self.itemDelegate()
+        star = getattr(delegate, "_star_rect", None)
+        if star is None:
+            return False
+        return star(self.visualRect(index)).adjusted(-6, -6, 6, 6).contains(pos)
+
     def startDrag(self, supported_actions):
         """Hand the selected photos to whatever they are dropped on.
 
@@ -847,14 +930,20 @@ class GridView(QListView):
         app does to a photo happens outside its own delete path, which goes to
         the Recycle Bin.
         """
-        items = self.selected_photo_items()
+        if not getattr(self, "_press_draggable", False):
+            return                       # see mousePressEvent
+        items = self.drag_order(self.selected_photo_items())
         mime, paths = self.drag_payload(items)
         if mime is None:
             return
+        # The ghost shows what will actually land, and how much of it: the
+        # payload drops photos that are gone, so counting the selection instead
+        # promised eight files and delivered five.
+        going = [it for it in items if it.path in set(paths)]
         drag = QDrag(self)
         drag.setMimeData(mime)
         delegate = self.itemDelegate()
-        pm = self.drag_pixmap(items, getattr(delegate, "cache", None))
+        pm = self.drag_pixmap(going, getattr(delegate, "cache", None))
         drag.setPixmap(pm)
         drag.setHotSpot(QPoint(pm.width() // 2, pm.height() // 2))
         drag.exec(Qt.CopyAction, Qt.CopyAction)
