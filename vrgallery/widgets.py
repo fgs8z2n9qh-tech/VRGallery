@@ -6,7 +6,7 @@ from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
                             QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
                             QVariantAnimation, Signal)
 from PySide6.QtGui import (QColor, QGuiApplication, QImage, QLinearGradient,
-                           QPainter, QPainterPath, QPen, QPixmap)
+                           QPainter, QPainterPath, QPen, QPixmap, QRegion)
 from PySide6.QtWidgets import (QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                                QLabel, QLayout, QPushButton, QScrollArea, QSizePolicy,
                                QSlider, QSpinBox, QVBoxLayout, QWidget)
@@ -17,53 +17,70 @@ from . import icons, style
 class Glass:
     """Backdrop-blurred panel background, painted by hand.
 
-    Qt has no backdrop filter, so what is underneath is grabbed from a nominated
-    source widget, blurred, tinted and edged. The source is named explicitly
-    rather than taken from the parent, because a panel is a child of what it
-    floats over and rendering the parent would draw the panel into its own
-    backdrop.
+    Qt has no backdrop filter, so what is underneath is sampled from a nominated
+    source widget, blurred, bent at the rim, tinted and edged. The source is
+    named explicitly rather than taken from the parent, because a panel is a
+    child of what it floats over and rendering the parent would draw the panel
+    into its own backdrop.
 
-    The numbers come from Mixtape's Glass.cs, which is the look this is meant to
-    match. Three of them are what separate glass from fog:
+    The look follows Mixtape's Glass.cs. What separates glass from fog:
 
-      * a LIGHT blur. This used to halve the sample up to five times -- a 1/32
-        smear -- and the result read as frosted bathroom glass. Liquid glass is
-        sharp: you can still make out what is behind it.
+      * a LIGHT blur. Halving the sample five times -- a 1/32 smear -- reads as
+        frosted bathroom glass. Liquid glass is sharp: you can still make out
+        what is behind it.
       * a VIBRANCE pass, so the colours behind push through the tint instead of
         greying out under it.
       * a TINT that is mostly transparent, and only thickens over a bright
         backdrop, where text would otherwise stop being readable.
+      * REFRACTION at the rim: the outer band magnifies what is under it and the
+        space curves into the panel, the way it does through a real pane. Each
+        colour channel bends by a slightly different amount, which is the faint
+        fringe along the edge of real glass. Without any of this the edge is
+        just where a blur stops.
+
+    Three things keep that affordable, and they matter more than the average
+    cost: what stutters is a burst on one frame in five, not a steady tax.
+
+      * THE WHOLE PIPELINE RUNS AT 1/K. The sample is rasterized straight into a
+        small pixmap rather than grabbed at full size and shrunk, the rim is
+        bent there too, and one upscale at the end does the blurring. Nine times
+        fewer pixels through the expensive part.
+      * THE FINISHED SURFACE IS CACHED. A frame is one blit -- eight
+        microseconds -- however much work went into the glass.
+      * IT ONLY REBUILDS WHEN THE BACKDROP MOVED. A panel over a grid that is
+        sitting still costs nothing at all; it used to re-sample thirty times a
+        second to arrive at the same picture.
     """
 
     RADIUS = 22          # roughly, in screen pixels
-    MARGIN = 20          # sample past the edges, so they blur from real content
-    TTL = 0.033          # seconds a sampled backdrop may be reused
+    MARGIN = 14          # sample past the edges, so the rim bends real content
+    TTL = 0.033          # seconds between rebuilds while the backdrop is moving
+    IDLE_TTL = 0.6       # ...and while it is not
 
-    BLUR_K = 3           # one downsample to 1/k and back, nothing more
+    K = 3                # everything happens at 1/K, and that IS the blur
     SAT = 1.42           # saturation multiplier for the vibrance pass
     LIFT = 1.03          # and a whisper of brightness with it
     TINT_MIN, TINT_MAX = 132, 178
     TINT_FROM = 60.0     # backdrop luma at which the tint starts thickening
     TINT_SLOPE = 0.5
 
-    @staticmethod
-    def _blur(pm, k=None):
-        """One trip down to 1/k and back, with a smooth transform both ways."""
-        k = k or Glass.BLUR_K
-        w, h = max(1, pm.width()), max(1, pm.height())
-        small = pm.scaled(max(2, w // k), max(2, h // k),
-                          Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
-        small = Glass._vibrance(small)
-        return small.scaled(w, h, Qt.IgnoreAspectRatio, Qt.SmoothTransformation)
+    # the refracting rim
+    BAND_FRAC, BAND_MIN, BAND_MAX = 0.34, 10.0, 30.0
+    MAG_FRAC, MAG_MAX = 0.62, 18.0
+    STRIPS = 5           # sub-steps per edge: the displacement has to fall off
+    CA = 0.14            # chromatic aberration, as a share of the displacement
+    # Depth pools at the bottom inner edge, under a light from above. A ring all
+    # the way round reads as a vignette, and a glowing rim reads as neon.
+    SHADE_BOTTOM, SHADE_SIDE, SHADE_TOP = 0.24, 0.10, 0.04
 
+    # ------------------------------------------------------------- sampling
     @staticmethod
     def _vibrance(pm):
-        """Push the saturation of the small sample, in place of a real filter.
+        """Push the saturation of the sample, in place of a real filter.
 
-        Done on the DOWNSAMPLED pixmap -- a ninth of the pixels -- and the
-        upsample afterwards spreads the boosted colour, so this costs a fraction
+        Done on the 1/K pixmap -- a ninth of the pixels -- so this costs a fifth
         of a millisecond even though it goes out to Pillow and back. If anything
-        about the conversion fails the sample is returned untouched: a slightly
+        about the conversion fails the sample comes back untouched: a slightly
         flat panel is a far better outcome than a painter that raises.
         """
         try:
@@ -99,79 +116,250 @@ class Glass:
         return int(max(Glass.TINT_MIN, min(Glass.TINT_MAX, a)))
 
     @staticmethod
-    def backdrop(widget, source, ttl=None):
-        """Sample and blur what is under `widget`. -> (pixmap, offset, luma)
+    def sample(widget, source, ttl=None):
+        """What is under `widget`, rasterized at 1/K. -> (pixmap, offset, luma, k)
 
-        Cached for a few tens of milliseconds: while the grid is scrolling this
-        runs on every frame, and re-grabbing and re-blurring each time cost more
-        than everything else on the frame put together.
+        `offset` is where the sample starts relative to the widget's own origin,
+        in FULL pixels -- negative, because it reaches out past the edges so the
+        rim has real content to bend. Divide by k to work in the sample.
         """
         if source is None or not source.isVisible():
-            return None, None, 0.0
+            return None, None, 0.0, Glass.K
         ttl = Glass.TTL if ttl is None else ttl
         now = time.perf_counter()
         cached = getattr(widget, "_glass_cache", None)
         if cached is not None:
             when, size, pm, off, luma = cached
             if now - when < ttl and size == widget.size():
-                return pm, off, luma
+                return pm, off, luma, Glass.K
         # Global coordinates, not mapTo: the panel floats over a widget that is
         # usually a sibling's child, and mapTo only works towards an ancestor.
         try:
             top_left = source.mapFromGlobal(widget.mapToGlobal(QPoint(0, 0)))
         except RuntimeError:
-            return None, None, 0.0
+            return None, None, 0.0, Glass.K
         area = QRect(top_left, widget.size()).adjusted(
             -Glass.MARGIN, -Glass.MARGIN, Glass.MARGIN, Glass.MARGIN)
         area = area.intersected(source.rect())
         if area.width() < 4 or area.height() < 4:
-            return None, None, 0.0
-        pm = source.grab(area)
-        if pm.isNull():
-            return None, None, 0.0
-        luma = Glass._luma(pm)
-        blurred = Glass._blur(pm)
-        # where the sample sits relative to the widget's own origin
+            return None, None, 0.0, Glass.K
+        k = Glass.K
+        small = QPixmap(max(2, -(-area.width() // k)), max(2, -(-area.height() // k)))
+        small.fill(Qt.transparent)
+        try:
+            p = QPainter(small)
+            p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+            p.scale(1.0 / k, 1.0 / k)
+            p.translate(-area.x(), -area.y())
+            source.render(p, QPoint(0, 0), QRegion(area),
+                          QWidget.RenderFlag.DrawChildren)
+            p.end()
+        except (RuntimeError, ValueError):
+            return None, None, 0.0, k
+        luma = Glass._luma(small)
+        small = Glass._vibrance(small)
         off = QPoint(area.x() - top_left.x(), area.y() - top_left.y())
-        widget._glass_cache = (now, widget.size(), blurred, off, luma)
-        return blurred, off, luma
+        widget._glass_cache = (now, widget.size(), small, off, luma)
+        return small, off, luma, k
 
     @staticmethod
-    def paint(p, widget, source, radius=16, tint=None, tint_alpha=None):
-        """Fill `widget`'s whole rect with glass. -> True if a backdrop was used."""
-        r = QRectF(widget.rect())
+    def backdrop(widget, source, ttl=None):
+        """The sample scaled back up: the plain blurred backdrop, full size."""
+        small, off, luma, k = Glass.sample(widget, source, ttl=ttl)
+        if small is None:
+            return None, None, 0.0
+        return small.scaled(small.width() * k, small.height() * k,
+                            Qt.IgnoreAspectRatio, Qt.SmoothTransformation), off, luma
+
+    # ------------------------------------------------------------ refracting
+    @staticmethod
+    def _bend(dst, src, w, h, band, mag, vertical):
+        """One axis of the rim, as strips that each sample a little inward.
+
+        A convex lens keeps refracted rays inside the shape, so content near an
+        edge is displaced TOWARDS the middle and comes out magnified. Each strip
+        is one scaled blit, and because the displacement falls to zero at the
+        inner boundary the band joins the untouched centre without a seam. Run
+        once per axis: two passes compose into a real corner, which one pass
+        drawn over the other cannot.
+        """
+        n = Glass.STRIPS
+        for i in range(n):
+            a = band * i / n
+            b = band * (i + 1) / n
+            fa = mag * (1.0 - a / band) ** 2
+            fb = mag * (1.0 - b / band) ** 2
+            span = (b - a) + (fb - fa)          # narrower than the strip -> magnified
+            if span <= 0.02:
+                continue
+            if vertical:
+                dst.drawPixmap(QRectF(0.0, a, w, b - a),
+                               src, QRectF(0.0, a + fa, w, span))
+                dst.drawPixmap(QRectF(0.0, h - b, w, b - a),
+                               src, QRectF(0.0, h - b - fb, w, span))
+            else:
+                dst.drawPixmap(QRectF(a, 0.0, b - a, h),
+                               src, QRectF(a + fa, 0.0, span, h))
+                dst.drawPixmap(QRectF(w - b, 0.0, b - a, h),
+                               src, QRectF(w - b - fb, 0.0, span, h))
+
+    @staticmethod
+    def _channel(pm, rgb):
+        """A copy of `pm` with only one colour channel left in it."""
+        out = QPixmap(pm.size())
+        out.fill(Qt.black)
+        p = QPainter(out)
+        p.drawPixmap(0, 0, pm)
+        p.setCompositionMode(QPainter.CompositionMode_Multiply)
+        p.fillRect(out.rect(), QColor(*rgb))
+        p.end()
+        return out
+
+    @staticmethod
+    def _pass(src, w, h, band, mag):
+        """Both axes of the rim, into a fresh pixmap the size of `src`."""
+        mid = QPixmap(src.size())
+        mid.fill(Qt.transparent)
+        q = QPainter(mid)
+        q.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        q.drawPixmap(0, 0, src)
+        Glass._bend(q, src, w, h, band, mag, vertical=False)
+        q.end()
+        out = QPixmap(src.size())
+        out.fill(Qt.transparent)
+        q = QPainter(out)
+        q.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        q.drawPixmap(0, 0, mid)
+        Glass._bend(q, mid, w, h, band, mag, vertical=True)
+        q.end()
+        return out
+
+    @staticmethod
+    def _refract(small, off, k, w, h, band, mag):
+        """The backdrop with its rim bent inward, still at 1/K.
+
+        A couple of pixels of colour separation is all real glass shows; more
+        than that is a prism gimmick rather than a window.
+        """
+        ws, hs = w / k, h / k
+        base = QPixmap(max(2, int(math.ceil(ws))), max(2, int(math.ceil(hs))))
+        base.fill(Qt.transparent)
+        p = QPainter(base)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        p.drawPixmap(QPointF(off.x() / k, off.y() / k), small)
+        p.end()
+        bs, ms = band / k, mag / k
+        if bs < 1.0 or ms < 0.2:
+            return base
+        if Glass.CA <= 0.0:
+            return Glass._pass(base, ws, hs, bs, ms)
+
+        out = QPixmap(base.size())
+        out.fill(Qt.black)
+        acc = QPainter(out)
+        acc.setCompositionMode(QPainter.CompositionMode_Plus)
+        for scale, rgb in ((1.0 - Glass.CA, (255, 0, 0)),
+                           (1.0, (0, 255, 0)),
+                           (1.0 + Glass.CA, (0, 0, 255))):
+            acc.drawPixmap(0, 0, Glass._pass(Glass._channel(base, rgb),
+                                             ws, hs, bs, ms * scale))
+        acc.end()
+        return out
+
+    # ------------------------------------------------------------ compositing
+    @staticmethod
+    def surface(widget, source, radius=16, tint=None, tint_alpha=None,
+                stamp=None, ttl=None):
+        """The finished glass for `widget`, composited once and then reused.
+
+        `stamp` is anything that changes when the backdrop could have moved -- a
+        scroll position, usually. While it holds still the surface is kept for
+        IDLE_TTL instead of TTL, which is the difference between a panel that
+        costs nothing when nothing is happening and one that rebuilds itself
+        thirty times a second to arrive at the same picture.
+        """
+        w, h = widget.width(), widget.height()
+        if w < 4 or h < 4:
+            return None
+        key = (widget.size(), radius, tint, tint_alpha)
+        now = time.perf_counter()
+        cached = getattr(widget, "_glass_surface", None)
+        if cached is not None:
+            when, ckey, cstamp, pm = cached
+            if ckey == key:
+                age = now - when
+                if age < (Glass.TTL if ttl is None else ttl):
+                    return pm
+                if stamp is not None and stamp == cstamp and age < Glass.IDLE_TTL:
+                    return pm
+        small, off, luma, k = Glass.sample(widget, source, ttl=ttl)
+        if small is None:
+            return None
+
+        band = max(Glass.BAND_MIN, min(Glass.BAND_MAX, min(w, h) * Glass.BAND_FRAC))
+        band = min(band, min(w, h) / 2.0 - 1.0)
+        mag = min(band * Glass.MAG_FRAC, Glass.MAG_MAX, Glass.MARGIN - 1.0)
+        lens = Glass._refract(small, off, k, float(w), float(h), band, mag)
+
+        surf = QPixmap(w, h)
+        surf.fill(Qt.transparent)
+        p = QPainter(surf)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        r = QRectF(0, 0, w, h)
         path = QPainterPath()
         path.addRoundedRect(r.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
         p.save()
         p.setClipPath(path)
-        blurred, offset, luma = Glass.backdrop(widget, source)
+        p.drawPixmap(r, lens, QRectF(0, 0, w / k, h / k))
         base = QColor(tint or style.PAL["surface2"])
-        if blurred is not None:
-            p.drawPixmap(offset, blurred)
-            base.setAlpha(Glass.tint_alpha(luma) if tint_alpha is None else tint_alpha)
+        base.setAlpha(Glass.tint_alpha(luma) if tint_alpha is None else tint_alpha)
         p.fillRect(r, base)
-
-        # Depth pools at the BOTTOM inner edge, the way it does under a real
-        # pane lit from above. The old version laid a sheen across the whole
-        # panel instead, which is what made the middle look milky.
-        band = max(6.0, min(14.0, r.height() * 0.28))
-        shade = QLinearGradient(r.left(), r.bottom() - band, r.left(), r.bottom())
-        shade.setColorAt(0.0, QColor(0, 0, 0, 0))
-        shade.setColorAt(1.0, QColor(0, 0, 0, 48))
-        p.fillRect(QRectF(r.left(), r.bottom() - band, r.width(), band), shade)
+        Glass._rim_shade(p, r, band)
         p.restore()
 
         p.setBrush(Qt.NoBrush)
-        # A hairline, and a brighter one along the top edge only: that glint is
-        # the specular highlight. A glow around the whole rim reads as neon.
-        p.setPen(QPen(QColor(255, 255, 255, 30), 1))
+        p.setPen(QPen(QColor(255, 255, 255, 28), 1))
         p.drawPath(path)
+        # The glint along the top edge is the specular highlight; a bright line
+        # all the way round would be neon instead of glass.
         p.save()
-        p.setClipRect(QRectF(r.left(), r.top(), r.width(), max(2.0, radius * 0.9)))
-        p.setPen(QPen(QColor(255, 255, 255, 64), 1))
+        p.setClipRect(QRectF(0, 0, w, max(2.0, radius * 0.9)))
+        p.setPen(QPen(QColor(255, 255, 255, 72), 1))
         p.drawPath(path)
         p.restore()
-        return blurred is not None
+        p.end()
+
+        widget._glass_surface = (now, key, stamp, surf)
+        return surf
+
+    @staticmethod
+    def _rim_shade(p, r, band):
+        """Directional depth: it pools at the bottom, barely touches the top."""
+        b = max(3.0, band)
+        for rect, grad, strength in (
+            (QRectF(r.left(), r.bottom() - b, r.width(), b),
+             (r.left(), r.bottom() - b, r.left(), r.bottom()), Glass.SHADE_BOTTOM),
+            (QRectF(r.left(), r.top(), r.width(), b),
+             (r.left(), r.top() + b, r.left(), r.top()), Glass.SHADE_TOP),
+            (QRectF(r.left(), r.top(), b, r.height()),
+             (r.left() + b, r.top(), r.left(), r.top()), Glass.SHADE_SIDE),
+            (QRectF(r.right() - b, r.top(), b, r.height()),
+             (r.right() - b, r.top(), r.right(), r.top()), Glass.SHADE_SIDE),
+        ):
+            g = QLinearGradient(*grad)
+            g.setColorAt(0.0, QColor(0, 0, 0, 0))
+            g.setColorAt(1.0, QColor(0, 0, 0, int(255 * strength)))
+            p.fillRect(rect, g)
+
+    @staticmethod
+    def paint(p, widget, source, radius=16, tint=None, tint_alpha=None, stamp=None):
+        """Fill `widget`'s whole rect with glass. -> True if a backdrop was used."""
+        surf = Glass.surface(widget, source, radius, tint, tint_alpha, stamp=stamp)
+        if surf is None:
+            return False
+        p.drawPixmap(0, 0, surf)
+        return True
 
 
 class SmoothScroll(QObject):
@@ -212,8 +400,15 @@ class SmoothScroll(QObject):
     def eventFilter(self, obj, ev):
         try:
             mine = obj is self.view.viewport()
-        except RuntimeError:      # the view went away before its filter did
-            self._timer.stop()
+        except (RuntimeError, AttributeError):
+            # The view went away before its filter did -- RuntimeError when the
+            # C++ side is gone, AttributeError when Python has already emptied
+            # the instance. Qt calling into a half-torn-down object is how a Qt
+            # app dies with an access violation and no traceback.
+            try:
+                self._timer.stop()
+            except (RuntimeError, AttributeError):
+                pass
             return False
         if mine and ev.type() == QEvent.Wheel:
             if ev.modifiers() & Qt.ControlModifier:
@@ -282,23 +477,31 @@ class SmoothScroll(QObject):
 class GlassBar(QFrame):
     """A frosted bar that content scrolls underneath."""
 
-    def __init__(self, parent=None, radius=0, tint=None, tint_alpha=175):
+    def __init__(self, parent=None, radius=0, tint=None, tint_alpha=None):
         super().__init__(parent)
         self._glass_source = None
         self._radius = radius
         self._tint = tint
         self._alpha = tint_alpha
+        self._stamp = 0
 
     def set_glass_source(self, w):
         self._glass_source = w
         self.update()
+
+    def set_glass_stamp(self, v):
+        """Tell the glass its backdrop moved. Anything comparable will do."""
+        if v != self._stamp:
+            self._stamp = v
+            self.update()
 
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
         if not Glass.paint(p, self, self._glass_source, radius=self._radius,
-                           tint=self._tint or style.PAL["bg"], tint_alpha=self._alpha):
+                           tint=self._tint or style.PAL["bg"], tint_alpha=self._alpha,
+                           stamp=self._stamp):
             p.fillRect(self.rect(), QColor(self._tint or style.PAL["bg"]))
         p.end()
 
@@ -328,11 +531,12 @@ class PageHead(QWidget):
         self._collapsed = False
 
         col = QVBoxLayout(self)
-        col.setContentsMargins(0, 0, 0, 0)
+        col.setContentsMargins(0, 0, 0, self.MARGIN)   # room for the shadow
         col.setSpacing(0)
         self.bar = GlassBar(self, radius=16)
         col.addWidget(self.bar)
         self._col = col
+        self._shadow = None
 
         row = QHBoxLayout(self.bar)
         row.setContentsMargins(24, self.PAD_OPEN, 24, self.PAD_OPEN)
@@ -403,6 +607,7 @@ class PageHead(QWidget):
         self.bar.set_glass_source(scroller.viewport())
         scroller.viewport().installEventFilter(self)
         scroller.verticalScrollBar().valueChanged.connect(self._sync)
+        scroller.verticalScrollBar().valueChanged.connect(self.bar.set_glass_stamp)
         self.measure()
         if reserve_in is not None:
             m = reserve_in.contentsMargins()
@@ -436,8 +641,53 @@ class PageHead(QWidget):
         return h + self.MARGIN
 
     def now(self):
-        """How tall it is at this moment, for placing whatever sits under it."""
-        return self.height() + self.MARGIN
+        """How tall it is at this moment, for placing whatever sits under it.
+
+        The widget already includes the gap it casts its shadow into, so this is
+        just its height.
+        """
+        return self.height()
+
+    def paintEvent(self, ev):
+        """The shadow the panel casts on the content sliding under it.
+
+        Without one a floating pane reads as painted onto the page rather than
+        held above it -- and this is the parent of the glass, so it lands behind
+        it without any compositing tricks. Drawn once per size into a pixmap: it
+        is repainted on every frame the bar is, because the bar's own corners
+        are transparent and Qt has to put something under them.
+        """
+        shadow = self._shadow_pixmap()
+        if shadow is not None:
+            QPainter(self).drawPixmap(0, 0, shadow)
+
+    def _shadow_pixmap(self):
+        panel = self.bar.geometry()
+        if self._extra is not None and self._extra.isVisible():
+            panel = panel.united(self._extra.geometry())
+        if panel.width() < 8 or panel.height() < 4:
+            return None
+        key = (self.size(), panel)
+        if self._shadow is not None and self._shadow[0] == key:
+            return self._shadow[1]
+        pm = QPixmap(self.size())
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        n = self.MARGIN
+        r = QRectF(panel)
+        # Concentric rounded rects, each a little larger, lower and fainter: a
+        # blur without the cost of one, and the light is from above so it sits
+        # below the panel rather than around it.
+        for i in range(n, 0, -1):
+            t = i / float(n)
+            p.setBrush(QColor(0, 0, 0, int(30 * (1.0 - t) ** 1.6) + 4))
+            p.drawRoundedRect(r.adjusted(-i * 0.4, i * 0.25, i * 0.4, i * 0.95),
+                              16 + i * 0.4, 16 + i * 0.4)
+        p.end()
+        self._shadow = (key, pm)
+        return pm
 
     def place(self):
         if self._scroller is None:
@@ -484,9 +734,10 @@ class PageHead(QWidget):
 
     def eventFilter(self, obj, ev):
         try:
-            mine = self._scroller is not None and obj is self._scroller.viewport()
-        except RuntimeError:      # the scroller went away before its filter did
-            return False
+            scroller = getattr(self, "_scroller", None)
+            mine = scroller is not None and obj is scroller.viewport()
+        except (RuntimeError, AttributeError):
+            return False          # the scroller went away before its filter did
         if mine and ev.type() == QEvent.Resize:
             self.place()
             self.viewport_resized.emit()

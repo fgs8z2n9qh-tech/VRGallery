@@ -379,8 +379,8 @@ def test_the_grid_scrolls_under_the_floating_header(window, app):
         if behind is not None:
             break
     assert behind is not None, "nothing scrolled under the header"
-    blurred, offset, _luma = Glass.backdrop(page.headbar, page.view.viewport())
-    assert blurred is not None and not blurred.isNull()
+    sampled, offset, _luma, _k = Glass.sample(page.headbar, page.view.viewport())
+    assert sampled is not None and not sampled.isNull()
     window.hide()
 
 
@@ -482,10 +482,10 @@ def test_scrolling_does_not_redo_work_it_can_keep(window, app):
 
     # the frosted backdrop is sampled at most every TTL, not every repaint
     page.headbar._glass_cache = None
-    first, _off, _l = Glass.backdrop(page.headbar, page.view.viewport())
-    again, _off, _l = Glass.backdrop(page.headbar, page.view.viewport())
+    first, _off, _l, _k = Glass.sample(page.headbar, page.view.viewport())
+    again, _off, _l, _k = Glass.sample(page.headbar, page.view.viewport())
     assert first is again, "the backdrop was sampled twice in one frame"
-    again, _off, _l = Glass.backdrop(page.headbar, page.view.viewport(), ttl=0)
+    again, _off, _l, _k = Glass.sample(page.headbar, page.view.viewport(), ttl=0)
     assert again is not first, "ttl=0 must force a fresh sample"
 
     # a settled tile is blitted whole: no rounded clip, no rescale. An
@@ -620,10 +620,10 @@ def test_the_floating_panels_render_their_glass(window, app):
     assert not page.selbar.isHidden(), "selecting photos should raise the bar"
 
     # the selection bar floats over photos, so its backdrop is really sampled
-    blurred, offset, _luma = Glass.backdrop(page.selbar, page.view.viewport())
-    assert blurred is not None and not blurred.isNull()
+    sampled, offset, _luma, k = Glass.sample(page.selbar, page.view.viewport())
+    assert sampled is not None and not sampled.isNull()
     assert offset.x() <= 0 and offset.y() <= 0, "the sample must start outside the panel"
-    assert blurred.width() >= page.selbar.width()
+    assert sampled.width() * k >= page.selbar.width(), "the rim has nothing to bend"
 
     for w in (page.sticky, page.selbar):
         w.resize(max(80, w.width()), max(24, w.height()))
