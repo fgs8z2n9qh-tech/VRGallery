@@ -56,6 +56,9 @@ class CardModel(QAbstractListModel):
         return None
 
     def flags(self, index):
+        card = index.data(CardRole)
+        if card and card["kind"] == "spacer":
+            return Qt.NoItemFlags       # nothing to click, hover or arrow onto
         return Qt.ItemIsEnabled | Qt.ItemIsSelectable
 
 
@@ -73,11 +76,19 @@ class CardDelegate(QStyledItemDelegate):
         self._f_sub.setPointSizeF(8.5)
 
     def sizeHint(self, option, index):
+        card = index.data(CardRole)
+        # The first row is a blank the height of the floating header, so the
+        # cards can scroll underneath it instead of starting behind it. Made as
+        # wide as the viewport, which is what pushes the real cards onto the
+        # next line.
+        if card and card["kind"] == "spacer":
+            return QSize(max(80, self.view.viewport().width() - 24),
+                         max(1, card["height"]))
         return QSize(self.W, self.H)
 
     def paint(self, p, option, index):
         card = index.data(CardRole)
-        if not card:
+        if not card or card["kind"] == "spacer":
             return
         p.save()
         p.setRenderHint(QPainter.Antialiasing, True)
@@ -147,12 +158,10 @@ class CardsPage(QWidget):
         self.icon_name = icon_name
         self._all_cards = []
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        head = QHBoxLayout()
-        hb, self.lab_title, self.lab_sub = page_header(title)
-        head.addLayout(hb)
-        head.addStretch(1)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.head = widgets.PageHead(self, title)
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
         self.search = QLineEdit()
         self.search.setObjectName("SearchBox")
         self.search.setPlaceholderText("Filter…")
@@ -162,10 +171,9 @@ class CardsPage(QWidget):
                               QLineEdit.LeadingPosition)
         self.search.textChanged.connect(self._apply_filter)
         if searchable:
-            head.addWidget(self.search)
+            self.head.add(self.search)
         else:
             self.search.hide()
-        root.addLayout(head)
         self.model = CardModel(self)
         self.view = QListView()
         self.view.setViewMode(QListView.IconMode)
@@ -185,7 +193,12 @@ class CardsPage(QWidget):
         self.view.setContextMenuPolicy(Qt.CustomContextMenu)
         self.view.customContextMenuRequested.connect(self._context)
         cache.ready.connect(lambda _pid: self.view.viewport().update())
-        root.addWidget(self.view, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(24, 0, 8, 0)
+        body.addWidget(self.view, 1)
+        root.addLayout(body, 1)
+        self.head.attach(self.view)
+        self.head.viewport_resized.connect(self.view.scheduleDelayedItemsLayout)
         self.empty = widgets.EmptyState(icon_name, "Nothing here yet", "", self.view)
         self.empty.hide()
 
@@ -208,7 +221,9 @@ class CardsPage(QWidget):
         t = self.search.text().strip().lower()
         cards = [c for c in self._all_cards
                  if not t or t in c["title"].lower() or c["kind"] == "new"]
-        self.model.set_cards(cards)
+        spacer = {"kind": "spacer", "title": "", "sub": "",
+                  "cover": None, "height": self.head.reserved()}
+        self.model.set_cards([spacer] + cards)
         n = sum(1 for c in cards if c["kind"] != "new")
         self.lab_sub.setText(f"{fmt.count_label(n)} {fmt.plural(n, 'item')}")
         # A page holding an action card ("New album") is not empty: covering it
@@ -218,13 +233,13 @@ class CardsPage(QWidget):
 
     def _clicked(self, ix):
         card = ix.data(CardRole)
-        if card:
+        if card and card["kind"] != "spacer":
             self.card_activated(card)
 
     def _context(self, pos):
         ix = self.view.indexAt(pos)
         card = ix.data(CardRole) if ix.isValid() else None
-        if card:
+        if card and card["kind"] != "spacer":
             self.card_context(card, self.view.viewport().mapToGlobal(pos))
 
     def resizeEvent(self, ev):
@@ -315,22 +330,10 @@ class SessionsPage(QWidget):
         super().__init__(parent)
         self.main = main
         self.cache = cache
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        head = QHBoxLayout()
-        hb, self.lab_title, self.lab_sub = page_header("Sessions")
-        head.addLayout(hb)
-        head.addStretch(1)
-        root.addLayout(head)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.holder = QWidget()
-        self.vbox = QVBoxLayout(self.holder)
-        self.vbox.setContentsMargins(0, 0, 8, 20)
-        self.vbox.setSpacing(12)
-        self.scroll.setWidget(self.holder)
-        root.addWidget(self.scroll, 1)
+        self.scroll, self.holder, self.vbox = widgets.scroll_body(self)
+        self.head = widgets.PageHead(self, "Sessions")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
+        self.head.attach(self.scroll, reserve_in=self.vbox)
 
     @staticmethod
     def _empty_state():
@@ -449,29 +452,15 @@ class PersonPage(QWidget):
         self.main = main
         self.cache = cache
         self.name = ""
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-
-        head = QHBoxLayout()
-        head.setSpacing(10)
+        self.scroll, holder, v = widgets.scroll_body(self)
+        self.head = widgets.PageHead(self, "")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
         self.btn_back = widgets.icon_btn("arrow-left", "Back", style.PAL["text"], px=19)
         self.btn_back.clicked.connect(lambda: self.main.activate("people"))
-        head.addWidget(self.btn_back)
-        hb, self.lab_title, self.lab_sub = page_header("")
-        head.addLayout(hb)
-        head.addStretch(1)
+        self.head.insert_front(self.btn_back)
         self.btn_all = widgets.ghost_btn("All photos", "image", primary=True)
         self.btn_all.clicked.connect(lambda: self.main.push_person(self.name))
-        head.addWidget(self.btn_all)
-        root.addLayout(head)
-
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        holder = QWidget()
-        v = QVBoxLayout(holder)
-        v.setContentsMargins(0, 0, 8, 20)
-        v.setSpacing(12)
+        self.head.add(self.btn_all)
 
         tiles = QHBoxLayout()
         tiles.setSpacing(12)
@@ -505,8 +494,7 @@ class PersonPage(QWidget):
         c3.vbox.addWidget(self.chart_months)
         v.addWidget(c3)
         v.addStretch(1)
-        scroll.setWidget(holder)
-        root.addWidget(scroll, 1)
+        self.head.attach(self.scroll, reserve_in=v)
 
     def show_person(self, name):
         self.name = name
@@ -558,25 +546,13 @@ class MomentsPage(QWidget):
         self.cache = cache
         self._moments = []
         self._stamp = None
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        head = QHBoxLayout()
-        hb, self.lab_title, self.lab_sub = page_header("Moments")
-        head.addLayout(hb)
-        head.addStretch(1)
+        self.scroll, self.holder, self.vbox = widgets.scroll_body(self)
+        self.head = widgets.PageHead(self, "Moments")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
         self.btn_rescan = widgets.ghost_btn("Rescan", "refresh")
         self.btn_rescan.clicked.connect(lambda: self.refresh(force=True))
-        head.addWidget(self.btn_rescan)
-        root.addLayout(head)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.holder = QWidget()
-        self.vbox = QVBoxLayout(self.holder)
-        self.vbox.setContentsMargins(0, 0, 8, 20)
-        self.vbox.setSpacing(12)
-        self.scroll.setWidget(self.holder)
-        root.addWidget(self.scroll, 1)
+        self.head.add(self.btn_rescan)
+        self.head.attach(self.scroll, reserve_in=self.vbox)
 
     @staticmethod
     def _empty_state():
@@ -858,25 +834,13 @@ class MemoriesPage(QWidget):
         super().__init__(parent)
         self.main = main
         self.cache = cache
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        head = QHBoxLayout()
-        hb, self.lab_title, self.lab_sub = page_header("Memories")
-        head.addLayout(hb)
-        head.addStretch(1)
+        self.scroll, self.holder, self.vbox = widgets.scroll_body(self)
+        self.head = widgets.PageHead(self, "Memories")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
         btn_rand = widgets.ghost_btn("Random day", "shuffle")
         btn_rand.clicked.connect(self._random_day)
-        head.addWidget(btn_rand)
-        root.addLayout(head)
-        self.scroll = QScrollArea()
-        self.scroll.setWidgetResizable(True)
-        self.holder = QWidget()
-        self.vbox = QVBoxLayout(self.holder)
-        self.vbox.setContentsMargins(0, 0, 8, 20)
-        self.vbox.setSpacing(12)
-        self.scroll.setWidget(self.holder)
-        root.addWidget(self.scroll, 1)
+        self.head.add(btn_rand)
+        self.head.attach(self.scroll, reserve_in=self.vbox)
 
     @staticmethod
     def _empty_state():
@@ -946,27 +910,17 @@ class StatsPage(QWidget):
     def __init__(self, main, parent=None):
         super().__init__(parent)
         self.main = main
-        root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        hb, self.lab_title, self.lab_sub = page_header("Statistics")
-        head = QHBoxLayout()
-        head.addLayout(hb)
-        head.addStretch(1)
-        self.cb_year = QComboBox()
+        self.scroll, holder, v = widgets.scroll_body(self)
+        self.head = widgets.PageHead(self, "Statistics")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
+        self.cb_year = widgets.ComboBox()
+        self.cb_year.setObjectName("OnGlass")
         self.cb_year.setToolTip("Narrow every chart on this page to one year")
         self.cb_year.currentIndexChanged.connect(self._year_changed)
-        head.addWidget(self.cb_year)
+        self.head.add(self.cb_year)
         self.btn_year = widgets.ghost_btn("Year in review", "award", primary=True)
         self.btn_year.clicked.connect(self._year_review)
-        head.addWidget(self.btn_year)
-        root.addLayout(head)
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        holder = QWidget()
-        v = QVBoxLayout(holder)
-        v.setContentsMargins(0, 0, 8, 20)
-        v.setSpacing(12)
+        self.head.add(self.btn_year)
         cards = QHBoxLayout()
         cards.setSpacing(12)
         self.c_total = widgets.StatCard("image")
@@ -1018,8 +972,7 @@ class StatsPage(QWidget):
         card_fc.vbox.addWidget(self.lab_forecast)
         v.addWidget(card_fc)
         v.addStretch(1)
-        scroll.setWidget(holder)
-        root.addWidget(scroll, 1)
+        self.head.attach(self.scroll, reserve_in=v)
 
     def _year_changed(self, _ix):
         self.refresh()
@@ -1189,6 +1142,8 @@ class CheckModel(QAbstractListModel):
 
     def flags(self, index):
         kind, _ = self.rows[index.row()]
+        if kind == "S":
+            return Qt.NoItemFlags
         return Qt.ItemIsEnabled if kind == "H" else (Qt.ItemIsEnabled | Qt.ItemIsSelectable)
 
     def checked(self):
@@ -1226,13 +1181,17 @@ class CheckDelegate(QStyledItemDelegate):
         self._fh.setWeight(QFont.DemiBold)
 
     def sizeHint(self, option, index):
-        kind, _ = index.data(CardRole)
+        kind, d = index.data(CardRole)
+        if kind == "S":                 # room for the floating header
+            return QSize(max(80, self.view.viewport().width() - 24), max(1, int(d)))
         if kind == "H":
             return QSize(max(80, self.view.viewport().width() - 24), 34)
         return QSize(self.W, self.H)
 
     def paint(self, p, option, index):
         kind, d = index.data(CardRole)
+        if kind == "S":
+            return
         p.save()
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
@@ -1335,13 +1294,11 @@ class CleanupPage(QWidget):
         self.mode = "black"
         self._convert_worker = None
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        head = QHBoxLayout()
-        hb, self.lab_title, self.lab_sub = page_header("Cleanup",
-                                                       "Deletes always go to the Recycle Bin")
-        head.addLayout(hb)
-        head.addStretch(1)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
+        self.head = widgets.PageHead(self, "Cleanup",
+                                     "Deletes always go to the Recycle Bin")
+        self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
         self.seg_group = QButtonGroup(self)
         self.seg_group.setExclusive(True)
         for key, label in self.MODES:
@@ -1352,15 +1309,14 @@ class CleanupPage(QWidget):
             b.setProperty("mode", key)
             b.setMinimumWidth(b.sizeHint().width())   # never squeezed to ellipsis
             self.seg_group.addButton(b)
-            head.addWidget(b)
+            self.head.add(b)
             if key == self.mode:
                 b.setChecked(True)
         self.seg_group.buttonClicked.connect(self._seg_clicked)
-        root.addLayout(head)
 
         self.scan_bar = QWidget()
         sb = QHBoxLayout(self.scan_bar)
-        sb.setContentsMargins(0, 0, 0, 0)
+        sb.setContentsMargins(24, 0, 24, 0)
         sb.setSpacing(10)
         self.scan_label = QLabel("Analyzing…")
         self.scan_label.setStyleSheet("color:%s; font-size:12px;" % style.PAL["dim"])
@@ -1377,14 +1333,20 @@ class CleanupPage(QWidget):
         self.view.setModel(self.model)
         self.delegate = CheckDelegate(self.view, cache, self.main.cfg, self)
         self.view.setItemDelegate(self.delegate)
+        self.smooth = widgets.SmoothScroll(self.view)
         self.view.check_changed.connect(self._update_bottom)
         cache.ready.connect(lambda _pid: self.view.viewport().update())
-        root.addWidget(self.view, 1)
+        body = QHBoxLayout()
+        body.setContentsMargins(24, 0, 8, 0)
+        body.addWidget(self.view, 1)
+        root.addLayout(body, 1)
+        self.head.attach(self.view)
+        self.head.viewport_resized.connect(self.view.scheduleDelayedItemsLayout)
         self.empty = widgets.EmptyState("check", "All clean", "", self.view)
         self.empty.hide()
 
         bottom = QHBoxLayout()
-        bottom.setContentsMargins(0, 6, 0, 14)
+        bottom.setContentsMargins(24, 6, 24, 14)
         bottom.setSpacing(8)
         self.lab_pick = QLabel("0 selected")
         self.lab_pick.setStyleSheet("color:%s;" % style.PAL["dim"])
@@ -1487,7 +1449,8 @@ class CleanupPage(QWidget):
                                      "restore puts them back where they were"))
         grouped = self.mode in ("burst", "dupes")
         deleted = self.mode == "deleted"
-        self.model.set_rows(rows)
+        # a blank first row, so the grid scrolls under the floating header
+        self.model.set_rows([("S", self.head.reserved())] + rows)
         self.btn_convert.setVisible(self.mode == "large")
         self.btn_restore.setVisible(deleted)
         self.btn_bin.setVisible(deleted)
@@ -1705,21 +1668,21 @@ class SettingsPage(QWidget):
         super().__init__(parent)
         self.main = main
         root = QVBoxLayout(self)
-        root.setContentsMargins(24, 18, 24, 0)
-        root.setSpacing(12)
-        hb, _t, self.lab_sub = page_header("Settings", "")
-        head = QHBoxLayout()
-        head.addLayout(hb)
-        head.addStretch(1)
-        root.addLayout(head)
+        root.setContentsMargins(0, 0, 0, 0)
+        root.setSpacing(0)
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        widgets.SmoothScroll(scroll)
+        self.scroll = scroll
         holder = QWidget()
         # A settings form stretched to the width of a maximised window puts the
         # label at one edge of the screen and its control at the other. Cap it
         # and keep it against the left margin, where the reading starts.
         outer = QHBoxLayout(holder)
-        outer.setContentsMargins(0, 0, 8, 20)
+        outer.setContentsMargins(24, 0, 16, 20)
+        self.head = widgets.PageHead(self, "Settings")
+        self.lab_sub = self.head.lab_sub
         column = QWidget()
         column.setMaximumWidth(920)
         outer.addWidget(column, 1, Qt.AlignTop)   # grows to its maximum, then stops
@@ -1791,7 +1754,7 @@ class SettingsPage(QWidget):
         self.chk_api.toggled.connect(self._toggle_api)
         arow.addWidget(self.chk_api)
         arow.addWidget(QLabel("Port:"))
-        self.sp_port = QSpinBox()
+        self.sp_port = widgets.SpinBox()
         self.sp_port.setRange(1024, 65535)
         self.sp_port.setValue(int(self.main.cfg.get("api_port") or 8770))
         self.sp_port.editingFinished.connect(self._change_port)
@@ -1896,7 +1859,7 @@ class SettingsPage(QWidget):
             lambda on: self.main.cfg.set("frame_captioned", bool(on)))
         card_frame.vbox.addWidget(self.chk_frame_cap)
         hint_frame = QLabel(
-            "Right-click a photo ▸ “Send to world frame”. VRGallery only writes the "
+            f"Right-click a photo ▸ “Send to world frame”. {paths.APP_NAME} only writes the "
             "file and runs your command — it never uploads anything itself. The Udon "
             "script and setup steps are in the app's world\\ folder. Anything you "
             "publish is visible to everyone who visits the world.")
@@ -1914,7 +1877,7 @@ class SettingsPage(QWidget):
             box = QHBoxLayout()
             box.setSpacing(8)
             box.addWidget(QLabel(label))
-            sp = QSpinBox()
+            sp = widgets.SpinBox()
             sp.setRange(lo, hi)
             sp.setValue(value)
             if suffix:
@@ -1948,7 +1911,7 @@ class SettingsPage(QWidget):
         crow = QHBoxLayout()
         crow.setSpacing(8)
         crow.addWidget(QLabel("Copy to clipboard as:"))
-        self.cb_copy = QComboBox()
+        self.cb_copy = widgets.ComboBox()
         self.cb_copy.addItems(["Downscaled (fast to paste)", "Full resolution"])
         self.cb_copy.setCurrentIndex(
             0 if (self.main.cfg.get("copy_mode") or "jpeg") == "jpeg" else 1)
@@ -1961,7 +1924,7 @@ class SettingsPage(QWidget):
 
         # startup / tray
         card_run = widgets.Card("STARTUP")
-        self.chk_tray = QCheckBox("Closing the window keeps VRGallery in the tray")
+        self.chk_tray = QCheckBox(f"Closing the window keeps {paths.APP_NAME} in the tray")
         self.chk_tray.setChecked(bool(self.main.cfg.get("close_to_tray")))
         self.chk_tray.toggled.connect(
             lambda on: self.main.cfg.set("close_to_tray", bool(on)))
@@ -1976,7 +1939,7 @@ class SettingsPage(QWidget):
             lambda on: self.main.cfg.set("start_minimized", bool(on)))
         card_run.vbox.addWidget(self.chk_startmin)
         hint_run = QLabel(
-            "VRChat only keeps the last few log files. While VRGallery runs it copies "
+            f"VRChat only keeps the last few log files. While {paths.APP_NAME} runs it copies "
             "each session into its own database, so leaving it in the tray is what keeps "
             "your world and people history complete.")
         hint_run.setWordWrap(True)
@@ -2026,6 +1989,7 @@ class SettingsPage(QWidget):
         v.addStretch(1)
         scroll.setWidget(holder)
         root.addWidget(scroll, 1)
+        self.head.attach(scroll, reserve_in=outer)
 
     def _appdir(self):
         return paths.APPDIR
@@ -2142,7 +2106,7 @@ class SettingsPage(QWidget):
         if not dest:
             self.lab_backup.setText(
                 "Your library is irreplaceable and lives on one drive. Point this at "
-                "another one and VRGallery will copy anything missing, verify it, "
+                f"another one and {paths.APP_NAME} will copy anything missing, verify it, "
                 "and never delete a thing at the destination.")
             return
         last = backup.last_run(dest) if os.path.isdir(dest) else ""
@@ -2206,7 +2170,8 @@ class SettingsPage(QWidget):
         if not ok:
             self.main.toast("Could not write the autostart entry.", "err")
         elif on:
-            self.main.toast("VRGallery will start with Windows, hidden in the tray.", "ok")
+            self.main.toast(
+                f"{paths.APP_NAME} will start with Windows, hidden in the tray.", "ok")
         else:
             self.main.toast("Autostart removed.", "ok")
 

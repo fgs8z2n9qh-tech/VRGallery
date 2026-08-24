@@ -131,6 +131,11 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key.startswith("scroll:"):         # e.g. scroll:4200, for the glass
+                win.activate("all")
+                page0 = win.page_grid
+                page0.view.verticalScrollBar().setValue(int(key.split(":", 1)[1]))
+                page0._sync_rail()
             elif key == "collapsed":                # the header shrunk by scrolling
                 win.activate("all")
                 page0 = win.page_grid

@@ -64,6 +64,7 @@ class TimelineRail(QWidget):
     jump_to = Signal(int)         # a vertical scrollbar value
 
     WIDTH = 54
+    PAD = 10                  # breathing room at both ends of the scale
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -73,8 +74,21 @@ class TimelineRail(QWidget):
         self._pos = 0.0           # current scroll value in px
         self._hover_y = None      # where the pointer is, for the month bubble
         self._bubble = None
+        self._top_inset = 0       # room for whatever floats over the top of the grid
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
+
+    def set_top_inset(self, px):
+        """Start the scale below the floating header.
+
+        The rail spans the whole page, so without this its first year label sits
+        in the strip the header and the window buttons occupy -- pointing at
+        photos that are behind the glass rather than at the ones you can see.
+        """
+        px = max(0, int(px))
+        if px != self._top_inset:
+            self._top_inset = px
+            self.update()
 
     def set_marks(self, marks, total):
         self._marks = marks
@@ -86,12 +100,16 @@ class TimelineRail(QWidget):
         self._pos = max(0.0, min(float(self._total), float(px)))
         self.update()
 
+    def _span(self):
+        top = self._top_inset + self.PAD
+        return top, max(top + 1, self.height() - self.PAD)
+
     def _y_for(self, px):
-        top, bottom = 10, self.height() - 10
+        top, bottom = self._span()
         return top + (bottom - top) * (min(px, self._total) / self._total)
 
     def _px_at(self, y):
-        top, bottom = 10, self.height() - 10
+        top, bottom = self._span()
         frac = (y - top) / max(1, bottom - top)
         return int(round(max(0.0, min(1.0, frac)) * self._total))
 
@@ -279,28 +297,15 @@ class GridPage(QWidget):
         # The header floats over the grid so the photos scroll underneath it and
         # show through the glass. The grid gets a spacer row of the same height
         # so nothing starts life hidden behind it.
-        self.headbar = widgets.GlassBar(self, radius=16)
-        head = QHBoxLayout(self.headbar)
-        head.setContentsMargins(24, 10, 24, 10)
-        head.setSpacing(10)
+        self.headwrap = widgets.PageHead(self, self.title_text)
+        self.headbar = self.headwrap.bar
+        self.titlecol = self.headwrap.titlecol
+        self.lab_title = self.headwrap.lab_title
+        self.lab_sub = self.headwrap.lab_sub
         self.btn_back = widgets.icon_btn("arrow-left", "Back", style.PAL["text"], px=19)
         self.btn_back.clicked.connect(self.back_requested)
         self.btn_back.hide()
-        head.addWidget(self.btn_back)
-        self.titlecol = QWidget()
-        tcol = QVBoxLayout(self.titlecol)
-        tcol.setContentsMargins(0, 0, 0, 0)
-        tcol.setSpacing(0)
-        self.lab_title = QLabel(self.title_text)
-        self.lab_title.setObjectName("PageHeaderTitle")
-        self.lab_sub = QLabel("")
-        self.lab_sub.setObjectName("PageHeaderSub")
-        tcol.addWidget(self.lab_title)
-        tcol.addWidget(self.lab_sub)
-        self._title_fx = QGraphicsOpacityEffect(self.titlecol)
-        self.titlecol.setGraphicsEffect(self._title_fx)
-        head.addWidget(self.titlecol)
-        head.addSpacing(18)
+        self.headwrap.insert_front(self.btn_back)
 
         # Years / Months / Days, the way a photo library is normally browsed:
         # zoom out to find the stretch of time, then zoom in on it.
@@ -322,8 +327,7 @@ class GridPage(QWidget):
             lv.addWidget(b)
         self.level_group.buttonClicked.connect(
             lambda b: self._level_clicked(b.property("level")))
-        head.addWidget(self.levels)
-        head.addStretch(1)
+        self.headwrap.add_left(self.levels, spacing=18)
 
         self.search = QLineEdit()
         self.search.setObjectName("SearchBox")
@@ -337,42 +341,36 @@ class GridPage(QWidget):
         self._search_timer.setInterval(280)
         self._search_timer.timeout.connect(self._apply_search)
         self.search.textChanged.connect(lambda _t: self._search_timer.start())
-        head.addWidget(self.search)
+        self.headwrap.add(self.search)
 
         self.btn_fav = widgets.icon_btn("heart", "Favorites only", style.PAL["dim"],
                                         checkable=True)
         self.btn_fav.toggled.connect(self._on_fav_toggle)
-        head.addWidget(self.btn_fav)
+        self.headwrap.add(self.btn_fav)
 
-        self.sort_box = QComboBox()
+        self.sort_box = widgets.ComboBox()
         self.sort_box.setObjectName("OnGlass")
         self.sort_box.addItems(["Newest first", "Oldest first"])
         self.sort_box.currentIndexChanged.connect(self._on_sort)
-        head.addWidget(self.sort_box)
+        self.headwrap.add(self.sort_box)
 
-        self.slider = QSlider(Qt.Horizontal)
+        self.slider = widgets.Slider(Qt.Horizontal)
         self.slider.setRange(128, 264)
         self.slider.setValue(int(self.cfg.get("thumb_px") or 176))
         self.slider.setFixedWidth(110)
         self.slider.setToolTip("Thumbnail size")
         self.slider.valueChanged.connect(self._on_slider)
-        head.addWidget(self.slider)
+        self.headwrap.add(self.slider)
 
         self.btn_filter = widgets.icon_btn("filter", "More filters", style.PAL["dim"],
                                            checkable=True)
         self.btn_filter.toggled.connect(self._toggle_filters)
-        head.addWidget(self.btn_filter)
+        self.headwrap.add(self.btn_filter)
         self.btn_play = widgets.icon_btn("play", "Slideshow", style.PAL["dim"])
         self.btn_play.clicked.connect(self._start_slideshow)
-        head.addWidget(self.btn_play)
-        # header + filter bar ride together as one floating overlay
-        self.headwrap = QWidget(self)
-        hw = QVBoxLayout(self.headwrap)
-        hw.setContentsMargins(0, 0, 0, 0)
-        hw.setSpacing(0)
-        hw.addWidget(self.headbar)
-        hw.addWidget(self._build_filter_bar())
-        self._init_header_collapse()
+        self.headwrap.add(self.btn_play)
+        # the filter bar rides with the header as one floating overlay
+        self.headwrap.set_extra_row(self._build_filter_bar())
 
         # --- grid ---
         self.model = GridModel(self)
@@ -392,10 +390,10 @@ class GridPage(QWidget):
         body.addWidget(self.rail)
         root.addLayout(body, 1)
         self.view.verticalScrollBar().valueChanged.connect(self._sync_rail)
-        # The floating bars are bound to the viewport, and the viewport shrinks
-        # whenever the scrollbar or the rail appears -- which the page's own
-        # resizeEvent never hears about.
-        self.view.viewport().installEventFilter(self)
+
+        self.headwrap.attach(self.view)
+        self.headwrap.collapsed_changed = self._position_overlays
+        self.headwrap.viewport_resized.connect(self._viewport_resized)
 
         cache.ready.connect(self.model.notify_thumb)
         self.delegate.fav_clicked.connect(lambda pid: self.main.act_favorite([pid]))
@@ -410,7 +408,6 @@ class GridPage(QWidget):
         self.empty = widgets.EmptyState("image", "Nothing here",
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
-        self.headbar.set_glass_source(self.view.viewport())
         self.sticky = StickyDay(self)
         self.sticky.set_glass_source(self.view.viewport())
         self.selbar = widgets.SelectionBar(self)
@@ -564,6 +561,10 @@ class GridPage(QWidget):
         if periods:
             self.btn_filter.setChecked(False)
         self.rail.setVisible(not periods and self.rail_has_marks())
+        # The rail IS the scrollbar while it is up: two of them side by side in
+        # the same gutter is one too many, and the plain one carries no dates.
+        self.view.setVerticalScrollBarPolicy(
+            Qt.ScrollBarAlwaysOff if self.rail.isVisible() else Qt.ScrollBarAsNeeded)
 
     def rail_has_marks(self):
         return len(getattr(self.rail, "_marks", [])) > 1
@@ -662,6 +663,7 @@ class GridPage(QWidget):
         return marks, max(1, total)
 
     def _refresh_rail(self):
+        self.rail.set_top_inset(self.head_height())
         self.rail.set_marks(*self.rail_marks())
         self._sync_rail()
 
@@ -799,96 +801,31 @@ class GridPage(QWidget):
         self._position_overlays()
         QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
 
-    HEAD_MARGIN = 8       # the floating header keeps the window's own border
-
-    # ---------------- the header shrinks once you are scrolled in ----------------
-    COLLAPSE_AT = 60          # px of scroll before the title gives up its room
-
-    PAD_OPEN, PAD_TIGHT = 10, 6
-
-    def _init_header_collapse(self):
-        """Measure both heights once, from the controls themselves.
-
-        The collapsed height has to clear the tallest control plus its padding.
-        Guessing it as "a bit less than the open one" cut the search box and the
-        pills in half.
-        """
-        self._head_expanded = self.headbar.sizeHint().height()
-        ctrl = max(self.search.sizeHint().height(),
-                   self.sort_box.sizeHint().height(),
-                   self.btn_play.sizeHint().height())
-        self._head_collapsed = min(self._head_expanded, ctrl + self.PAD_TIGHT * 2)
-        self._collapsed = False
-        self._collapse_anim = QVariantAnimation(self)
-        self._collapse_anim.setDuration(180)
-        self._collapse_anim.setEasingCurve(QEasingCurve.OutCubic)
-        self._collapse_anim.valueChanged.connect(self._apply_collapse)
+    # The header, its collapse and its placement all live in widgets.PageHead
+    # now, so that every other page wears the same one. What stays here is the
+    # grid's own furniture: the pinned day, the selection bar, the empty state.
+    def _viewport_resized(self):
+        self._position_overlays()
+        if self.level == "all":           # square tiles are sized from the width
+            self.view.scheduleDelayedItemsLayout()
 
     def _apply_collapse(self, t):
-        """t: 0 fully open, 1 fully collapsed."""
-        w = self.titlecol.sizeHint().width()
-        self.titlecol.setMaximumWidth(max(0, int(w * (1 - t))))
-        self._title_fx.setOpacity(max(0.0, 1.0 - t * 1.6))
-        pad = round(self.PAD_OPEN + (self.PAD_TIGHT - self.PAD_OPEN) * t)
-        self.headbar.layout().setContentsMargins(24, pad, 24, pad)
-        h = self._head_expanded + (self._head_collapsed - self._head_expanded) * t
-        self.headbar.setFixedHeight(int(round(h)))
-        self._position_overlays()
+        self.headwrap.apply_collapse(t)
 
     def _sync_header(self):
-        if not hasattr(self, "_collapse_anim"):
-            return
-        want = self.view.verticalScrollBar().value() > self.COLLAPSE_AT
-        if want == self._collapsed:
-            return
-        self._collapsed = want
-        self._collapse_anim.stop()
-        start = self._collapse_anim.currentValue()
-        self._collapse_anim.setStartValue(float(start if start is not None
-                                                else (0.0 if want else 1.0)))
-        self._collapse_anim.setEndValue(1.0 if want else 0.0)
-        self._collapse_anim.start()
-
-    def eventFilter(self, obj, ev):
-        if obj is self.view.viewport() and ev.type() == QEvent.Resize:
-            self._position_overlays()
-            if self.level == "all":       # square tiles are sized from the width
-                self.view.scheduleDelayedItemsLayout()
-        return super().eventFilter(obj, ev)
+        self.headwrap._sync()
 
     def head_height(self):
-        """What the grid leaves free at the top: always the OPEN height.
-
-        If this followed the header as it shrank, the spacer row would resize
-        under the content and the whole grid would jump while you scrolled.
-        """
-        if not hasattr(self, "headwrap"):
-            return 0
-        h = getattr(self, "_head_expanded", None) or self.headbar.sizeHint().height()
-        if self.filter_bar.isVisible():
-            h += self.filter_bar.sizeHint().height()
-        return h + self.HEAD_MARGIN
+        """What the grid leaves free at the top: always the OPEN height."""
+        return self.headwrap.reserved() if hasattr(self, "headwrap") else 0
 
     def head_now(self):
         """How tall it is at this moment, for placing what sits under it."""
-        if not hasattr(self, "headwrap"):
-            return 0
-        return self.headwrap.height() + self.HEAD_MARGIN
+        return self.headwrap.now() if hasattr(self, "headwrap") else 0
 
     def _position_overlays(self, animate_selbar=False):
         if hasattr(self, "headwrap"):
-            # Bound to the VIEWPORT, so the bar clears the scrollbar and the
-            # timeline rail rather than lying across either of them.
-            m = self.HEAD_MARGIN
-            vp = self.view.viewport()
-            tl = vp.mapTo(self, QPoint(0, 0))
-            # Flush with the top: an inset there leaves a sliver of scrolled
-            # photo peeking over the bar, which reads as a glitch rather than
-            # as depth.
-            self.headwrap.setGeometry(tl.x() + m, 0,
-                                      max(160, vp.width() - m * 2),
-                                      self.headwrap.sizeHint().height())
-            self.headwrap.raise_()
+            self.headwrap.place()
         if self.sticky.isVisible():
             self._place_sticky()
         if self.empty.isVisible():

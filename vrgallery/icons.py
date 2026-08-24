@@ -118,8 +118,15 @@ def _svg(name, color, width):
             f'stroke-linejoin="round">{body}</svg>')
 
 
-def pixmap(name, color, px, dpr=1.0, width=2.0, fill=None):
-    key = (name, color, px, round(dpr, 2), width, fill)
+def pixmap(name, color, px, dpr=1.0, width=2.0, fill=None, pad=0):
+    """Render one glyph. `pad` adds empty pixels to its right.
+
+    That padding is the only reliable way to put air between the icon and the
+    label of a QPushButton: once a style sheet sets `padding` on the button, Qt
+    lays the icon flush against the text and no QSS property moves it apart.
+    Widening the pixmap itself does, and it survives every style engine.
+    """
+    key = (name, color, px, round(dpr, 2), width, fill, pad)
     pm = _cache.get(key)
     if pm is not None:
         return pm
@@ -130,7 +137,7 @@ def pixmap(name, color, px, dpr=1.0, width=2.0, fill=None):
            f'stroke="{color}" stroke-width="{width}" stroke-linecap="round" '
            f'stroke-linejoin="round">{body}</svg>')
     r = QSvgRenderer(QByteArray(svg.encode("utf-8")))
-    pm = QPixmap(size, size)
+    pm = QPixmap(size + int(pad * dpr), size)
     pm.fill(Qt.transparent)
     p = QPainter(pm)
     p.setRenderHint(QPainter.Antialiasing, True)
@@ -141,9 +148,9 @@ def pixmap(name, color, px, dpr=1.0, width=2.0, fill=None):
     return pm
 
 
-def qicon(name, color, px=20, dpr=2.0, width=2.0, fill=None):
+def qicon(name, color, px=20, dpr=2.0, width=2.0, fill=None, pad=0):
     ic = QIcon()
-    ic.addPixmap(pixmap(name, color, px, dpr, width, fill))
+    ic.addPixmap(pixmap(name, color, px, dpr, width, fill, pad))
     return ic
 
 

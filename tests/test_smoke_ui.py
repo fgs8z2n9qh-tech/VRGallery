@@ -80,9 +80,12 @@ def test_the_new_album_card_is_clickable_when_there_are_no_albums(window):
     # so ask whether the widget was explicitly hidden instead
     assert page.empty.isHidden(), "the empty state covered the New album card"
 
-    ix = page.model.index(0, 0)
-    assert ix.isValid()
     from vrgallery.pages import CardRole
+    # Row 0 is the blank that reserves the floating header's room; the first
+    # thing a person can actually click is the one after it.
+    assert page.model.index(0, 0).data(CardRole)["kind"] == "spacer"
+    ix = page.model.index(1, 0)
+    assert ix.isValid()
     assert ix.data(CardRole)["kind"] == "new"
 
     # A real click, hit-tested through whatever is layered over the view --
@@ -103,7 +106,10 @@ def test_a_page_with_nothing_at_all_still_shows_its_empty_state(window):
     window.activate("worlds")
     page = window.page_worlds
     page.refresh()
-    assert page.model.rowCount() == 0
+    from vrgallery.pages import CardRole
+    kinds = [page.model.index(r, 0).data(CardRole)["kind"]
+             for r in range(page.model.rowCount())]
+    assert kinds == ["spacer"], "nothing but the header spacer"
     assert not page.empty.isHidden()
 
 
@@ -373,7 +379,7 @@ def test_the_grid_scrolls_under_the_floating_header(window, app):
         if behind is not None:
             break
     assert behind is not None, "nothing scrolled under the header"
-    blurred, offset = Glass.backdrop(page.headbar, page.view.viewport())
+    blurred, offset, _luma = Glass.backdrop(page.headbar, page.view.viewport())
     assert blurred is not None and not blurred.isNull()
     window.hide()
 
@@ -393,16 +399,17 @@ def test_the_header_shrinks_once_you_are_scrolled_in(window, app):
     open_h = page.headbar.height()
     reserved = page.head_height()
     assert page.titlecol.maximumWidth() > 0
-    assert not page._collapsed
+    head = page.headwrap
+    assert not head._collapsed
 
     bar = page.view.verticalScrollBar()
-    bar.setValue(page.COLLAPSE_AT + 40)
+    bar.setValue(head.COLLAPSE_AT + 40)
     app.processEvents()
-    assert page._collapsed
+    assert head._collapsed
     page._apply_collapse(1.0)                 # skip to the end of the animation
     assert page.headbar.height() < open_h, "the header did not shrink"
     assert page.titlecol.maximumWidth() == 0
-    assert page._title_fx.opacity() == 0.0
+    assert head._title_fx.opacity() == 0.0
     # what the grid leaves free must NOT follow it, or the content jumps
     assert page.head_height() == reserved
     # and the pinned day follows the header down to its new height
@@ -410,7 +417,7 @@ def test_the_header_shrinks_once_you_are_scrolled_in(window, app):
 
     bar.setValue(0)
     app.processEvents()
-    assert not page._collapsed
+    assert not head._collapsed
     page._apply_collapse(0.0)
     assert page.headbar.height() == open_h
     assert page.titlecol.maximumWidth() > 0
@@ -475,10 +482,10 @@ def test_scrolling_does_not_redo_work_it_can_keep(window, app):
 
     # the frosted backdrop is sampled at most every TTL, not every repaint
     page.headbar._glass_cache = None
-    first, _off = Glass.backdrop(page.headbar, page.view.viewport())
-    again, _off = Glass.backdrop(page.headbar, page.view.viewport())
+    first, _off, _l = Glass.backdrop(page.headbar, page.view.viewport())
+    again, _off, _l = Glass.backdrop(page.headbar, page.view.viewport())
     assert first is again, "the backdrop was sampled twice in one frame"
-    again, _off = Glass.backdrop(page.headbar, page.view.viewport(), ttl=0)
+    again, _off, _l = Glass.backdrop(page.headbar, page.view.viewport(), ttl=0)
     assert again is not first, "ttl=0 must force a fresh sample"
 
     # a settled tile is blitted whole: no rounded clip, no rescale. An
@@ -613,7 +620,7 @@ def test_the_floating_panels_render_their_glass(window, app):
     assert not page.selbar.isHidden(), "selecting photos should raise the bar"
 
     # the selection bar floats over photos, so its backdrop is really sampled
-    blurred, offset = Glass.backdrop(page.selbar, page.view.viewport())
+    blurred, offset, _luma = Glass.backdrop(page.selbar, page.view.viewport())
     assert blurred is not None and not blurred.isNull()
     assert offset.x() <= 0 and offset.y() <= 0, "the sample must start outside the panel"
     assert blurred.width() >= page.selbar.width()
