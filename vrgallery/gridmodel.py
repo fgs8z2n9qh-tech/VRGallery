@@ -2,9 +2,9 @@
 import time
 from collections import OrderedDict
 
-from PySide6.QtCore import (QAbstractListModel, QModelIndex, QObject, QRect, QRectF, QSize,
-                            Qt, Signal)
-from PySide6.QtGui import (QColor, QFont, QFontMetrics, QLinearGradient, QPainter,
+from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QObject, QPoint,
+                            QRect, QRectF, QSize, Qt, QUrl, Signal)
+from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QAbstractItemView
 
@@ -214,7 +214,7 @@ class GridModel(QAbstractListModel):
     # every item on every repaint -- it profiled at fifteen microseconds a call.
     _FLAGS_NONE = Qt.NoItemFlags
     _FLAGS_INERT = Qt.ItemIsEnabled
-    _FLAGS_ITEM = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+    _FLAGS_ITEM = Qt.ItemIsEnabled | Qt.ItemIsSelectable | Qt.ItemIsDragEnabled
 
     def flags(self, index):
         if not index.isValid():
@@ -705,6 +705,11 @@ class GridView(QListView):
         self.verticalScrollBar().setSingleStep(48)
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setFrameShape(QListView.NoFrame)
+        # Drag photos out to Explorer, Discord, anywhere that takes files.
+        # DragOnly and CopyAction, both of them deliberately: see startDrag.
+        self.setDragEnabled(True)
+        self.setDragDropMode(QAbstractItemView.DragOnly)
+        self.setDefaultDropAction(Qt.CopyAction)
         from . import widgets
         self.smooth = widgets.SmoothScroll(self)
         self.doubleClicked.connect(self._maybe_open)
@@ -758,6 +763,101 @@ class GridView(QListView):
     def contextMenuEvent(self, ev):
         ix = self.indexAt(ev.pos())
         self.context_requested.emit(ev.globalPos(), ix)
+
+    # ------------------------------------------------------------ dragging
+    def drag_payload(self, items):
+        """What leaves the app when you drag photos out. -> (QMimeData, paths)
+
+        Files that are not on disk any more are dropped: a library can outlive
+        the folder it points at, and handing a drop target a URL to nothing gets
+        an error dialog from Explorer rather than from us. None if nothing is
+        left to drag.
+        """
+        import os
+        paths = []
+        for it in items:
+            path = getattr(it, "path", None)
+            if path and os.path.exists(path):
+                paths.append(path)
+        if not paths:
+            return None, []
+        mime = QMimeData()
+        mime.setUrls([QUrl.fromLocalFile(p) for p in paths])
+        # A plain-text list as well, for anything that takes text but not files
+        mime.setText("\n".join(paths))
+        return mime, paths
+
+    def drag_pixmap(self, items, cache):
+        """What the cursor carries: the first thumbnail, and how many there are."""
+        first = None
+        for it in items:
+            pm = cache.get(it) if cache is not None else None
+            if pm is not None and not pm.isNull():
+                first = pm
+                break
+        side, pad = 96, 8
+        out = QPixmap(side + pad, side + pad)
+        out.fill(QColor(0, 0, 0, 0))
+        p = QPainter(out)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        body = QRectF(0, 0, side, side)
+        path = QPainterPath()
+        path.addRoundedRect(body, 12, 12)
+        p.setClipPath(path)
+        if first is not None:
+            fw, fh = first.width(), first.height()
+            scale = max(side / fw, side / fh)
+            dw, dh = fw * scale, fh * scale
+            p.drawPixmap(QRectF((side - dw) / 2, (side - dh) / 2, dw, dh),
+                         first, QRectF(0, 0, fw, fh))
+        else:
+            p.fillRect(body, QColor(style.PAL["surface2"]))
+        p.setClipping(False)
+        p.setBrush(Qt.NoBrush)
+        p.setPen(QPen(QColor(255, 255, 255, 90), 1))
+        p.drawPath(path)
+        if len(items) > 1:
+            badge = QRectF(side - 30, side - 24, 30 + pad, 24 + pad - 2)
+            p.setPen(Qt.NoPen)
+            ac = style.accent(self._accent_key())
+            p.setBrush(QColor(ac["a"]))
+            p.drawRoundedRect(badge, 11, 11)
+            f = QFont()
+            f.setPointSizeF(9.5)
+            f.setWeight(QFont.Bold)
+            p.setFont(f)
+            p.setPen(QColor("#0b0e14"))
+            p.drawText(badge, Qt.AlignCenter, str(len(items)))
+        p.end()
+        return out
+
+    def _accent_key(self):
+        page = self.parent()
+        cfg = getattr(page, "cfg", None)
+        return cfg.get("accent") if cfg is not None else style.DEFAULT_ACCENT
+
+    def startDrag(self, supported_actions):
+        """Hand the selected photos to whatever they are dropped on.
+
+        COPY, AND ONLY COPY. Qt's default for an item view offers whatever the
+        caller supports, and a drop onto a folder with MoveAction available
+        would MOVE the originals out of the VRChat folder -- the library would
+        be pointing at nothing and the user would have no idea why. Nothing this
+        app does to a photo happens outside its own delete path, which goes to
+        the Recycle Bin.
+        """
+        items = self.selected_photo_items()
+        mime, paths = self.drag_payload(items)
+        if mime is None:
+            return
+        drag = QDrag(self)
+        drag.setMimeData(mime)
+        delegate = self.itemDelegate()
+        pm = self.drag_pixmap(items, getattr(delegate, "cache", None))
+        drag.setPixmap(pm)
+        drag.setHotSpot(QPoint(pm.width() // 2, pm.height() // 2))
+        drag.exec(Qt.CopyAction, Qt.CopyAction)
 
     def selected_photo_items(self):
         out = []
