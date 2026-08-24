@@ -188,6 +188,18 @@ class GridModel(QAbstractListModel):
     def rowCount(self, parent=QModelIndex()):
         return 0 if parent.isValid() else len(self._rows)
 
+    def row_at(self, row):
+        """(kind, payload) without a trip through Qt.
+
+        index.data(role) leaves Python, crosses into C++, and comes straight
+        back into data() below -- 5.8 microseconds a call, twice per tile, on
+        every repaint. The delegate owns this model; it can just ask.
+        """
+        try:
+            return self._rows[row]
+        except IndexError:
+            return None, None
+
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
@@ -198,15 +210,21 @@ class GridModel(QAbstractListModel):
             return payload
         return None
 
+    # Built once. Combining two flags allocates, and flags() is called for
+    # every item on every repaint -- it profiled at fifteen microseconds a call.
+    _FLAGS_NONE = Qt.NoItemFlags
+    _FLAGS_INERT = Qt.ItemIsEnabled
+    _FLAGS_ITEM = Qt.ItemIsEnabled | Qt.ItemIsSelectable
+
     def flags(self, index):
         if not index.isValid():
-            return Qt.NoItemFlags
-        kind, _ = self._rows[index.row()]
-        if kind in (KIND_HEADER, KIND_SPACER):
+            return self._FLAGS_NONE
+        kind = self._rows[index.row()][0]
+        if kind == KIND_HEADER or kind == KIND_SPACER:
             # NoItemFlags on a row inside an IconMode QListView crashes the
             # native layout; a header is enabled-but-not-selectable and works
-            return Qt.ItemIsEnabled
-        return Qt.ItemIsEnabled | Qt.ItemIsSelectable
+            return self._FLAGS_INERT
+        return self._FLAGS_ITEM
 
     def day_of_row(self, row):
         """(day, count, header_row) for whatever is at this row, or None."""
@@ -276,6 +294,19 @@ class GridModel(QAbstractListModel):
                 self.dataChanged.emit(ix, ix, [Qt.DecorationRole])
 
 
+# Building a Qt flag combination costs 4 us and testing one costs 2 us -- which
+# does not matter anywhere except in a delegate, where it happens for every tile
+# on every repaint. Profiled at a hundred thousand enum calls in four seconds of
+# scrolling. Built once here; the state tests compare plain ints instead.
+ST_HOVER = QStyle.State_MouseOver.value
+ST_SELECTED = QStyle.State_Selected.value
+AL_LEFT_BOTTOM = Qt.AlignLeft | Qt.AlignBottom
+AL_RIGHT_BOTTOM = Qt.AlignRight | Qt.AlignBottom
+AL_LEFT_VCENTER = Qt.AlignLeft | Qt.AlignVCenter
+AL_RIGHT_VCENTER = Qt.AlignRight | Qt.AlignVCenter
+AL_HCENTER_TOP = Qt.AlignHCenter | Qt.AlignTop
+
+
 class PhotoDelegate(QStyledItemDelegate):
     """Rounded cover-crop thumbnails; day headers span the full row."""
 
@@ -298,6 +329,10 @@ class PhotoDelegate(QStyledItemDelegate):
         self._f_small = QFont()
         self._f_small.setPointSizeF(8.5)
         self._f_small.setWeight(QFont.DemiBold)
+        self._f_count = QFont(self._f_head)      # built once, not per header
+        self._f_count.setWeight(QFont.Normal)
+        self._f_count.setPointSizeF(9.5)
+        self._heads = OrderedDict()              # rendered day headers
         self._hover_id = None
         self._hover_t = 0.0
 
@@ -384,41 +419,65 @@ class PhotoDelegate(QStyledItemDelegate):
 
     # --- painting ---
     def paint(self, painter, option, index):
-        kind = index.data(KindRole)
+        model = index.model()
+        row = index.row()
+        kind, payload = (model.row_at(row) if hasattr(model, "row_at")
+                         else (index.data(KindRole), index.data(ItemRole)))
+        if kind == KIND_SPACER:
+            return
         painter.save()
         painter.setRenderHint(QPainter.Antialiasing, True)
         painter.setRenderHint(QPainter.SmoothPixmapTransform, True)
-        if kind == KIND_SPACER:
-            painter.restore()
-            return
         if kind == KIND_HEADER:
-            self._paint_header(painter, option, index)
+            self._paint_header(painter, option, payload)
         elif kind == KIND_PERIOD:
-            self._paint_period(painter, option, index)
+            self._paint_period(painter, option, payload)
         else:
-            self._paint_photo(painter, option, index)
+            self._paint_photo(painter, option, payload)
         painter.restore()
 
-    def _paint_header(self, p, option, index):
-        day, count = index.data(ItemRole)
-        r = option.rect
-        p.setFont(self._f_head)
-        p.setPen(QColor(style.PAL["text"]))
-        text_r = r.adjusted(4, 0, -4, -6)
-        p.drawText(text_r, Qt.AlignLeft | Qt.AlignBottom, fmt.day_label(day))
-        p.setPen(QColor(style.PAL["faint"]))
-        f2 = QFont(self._f_head)
-        f2.setWeight(QFont.Normal)
-        f2.setPointSizeF(9.5)
-        p.setFont(f2)
-        p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom,
-                   f"{count} {fmt.plural(count, 'photo')}")
+    def _header_pixmap(self, day, count, w, h):
+        """A whole day header, laid out once and then blitted.
 
-    def _paint_period(self, p, option, index):
+        Profiled: this row cost more per second than every photo tile put
+        together. Two drawText calls is two text layouts and two rasterizations,
+        and building the second QFont hits the font database -- all of it on
+        every repaint, for a line that only changes when the day does.
+        """
+        dpr = self.view.devicePixelRatioF()
+        key = (day, count, w, h, round(dpr, 2))
+        hit = self._heads.get(key)
+        if hit is not None:
+            self._heads.move_to_end(key)
+            return hit
+        out = QPixmap(max(1, int(w * dpr)), max(1, int(h * dpr)))
+        out.setDevicePixelRatio(dpr)
+        out.fill(QColor(0, 0, 0, 0))
+        q = QPainter(out)
+        text_r = QRectF(4, 0, max(1, w - 8), max(1, h - 6))
+        q.setFont(self._f_head)
+        q.setPen(QColor(style.PAL["text"]))
+        q.drawText(text_r, AL_LEFT_BOTTOM, fmt.day_label(day))
+        q.setFont(self._f_count)
+        q.setPen(QColor(style.PAL["faint"]))
+        q.drawText(text_r, AL_RIGHT_BOTTOM,
+                   f"{count} {fmt.plural(count, 'photo')}")
+        q.end()
+        self._heads[key] = out
+        while len(self._heads) > 96:
+            self._heads.popitem(last=False)
+        return out
+
+    def _paint_header(self, p, option, payload):
+        day, count = payload
+        r = option.rect
+        p.drawPixmap(r.topLeft(), self._header_pixmap(day, count, r.width(), r.height()))
+
+    def _paint_period(self, p, option, payload):
         """A big cover with the period written across the bottom of it."""
-        d = index.data(ItemRole)
+        d = payload
         r = QRectF(option.rect)
-        hovered = bool(option.state & QStyle.State_MouseOver)
+        hovered = bool(option.state.value & ST_HOVER)
         path = QPainterPath()
         path.addRoundedRect(r, 16, 16)
         p.save()
@@ -449,24 +508,25 @@ class PhotoDelegate(QStyledItemDelegate):
         p.setFont(f)
         p.setPen(QColor(255, 255, 255))
         text_r = r.adjusted(18, 0, -18, -14)
-        p.drawText(text_r, Qt.AlignLeft | Qt.AlignBottom, d["label"])
+        p.drawText(text_r, AL_LEFT_BOTTOM, d["label"])
         f2 = QFont()
         f2.setPointSizeF(10)
         p.setFont(f2)
         p.setPen(QColor(255, 255, 255, 190))
         sub = f"{fmt.count_label(d['count'])} {fmt.plural(d['count'], 'photo')}"
-        p.drawText(text_r, Qt.AlignRight | Qt.AlignBottom, sub)
+        p.drawText(text_r, AL_RIGHT_BOTTOM, sub)
         if hovered:
             p.setBrush(Qt.NoBrush)
             p.setPen(QPen(QColor(255, 255, 255, 120), 2))
             p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 16, 16)
 
-    def _paint_photo(self, p, option, index):
-        item = index.data(ItemRole)
+    def _paint_photo(self, p, option, payload):
+        item = payload
         r = option.rect
         rf = QRectF(r)
-        hovered = bool(option.state & QStyle.State_MouseOver)
-        selected = bool(option.state & QStyle.State_Selected)
+        st = option.state.value
+        hovered = bool(st & ST_HOVER)
+        selected = bool(st & ST_SELECTED)
         _path = []
 
         def path():
@@ -503,7 +563,7 @@ class PhotoDelegate(QStyledItemDelegate):
             p.setFont(self._f_small)
             p.setPen(QColor(style.PAL["faint"]))
             p.drawText(QRectF(rf.x(), rf.center().y() + 12, rf.width(), 16),
-                       Qt.AlignHCenter | Qt.AlignTop, "video")
+                       AL_HCENTER_TOP, "video")
         elif pm is None or pm.isNull():
             p.fillRect(r, QColor(style.PAL["surface2"]))
             glyph = icons.pixmap("aperture", style.PAL["border2"], 26,
@@ -575,10 +635,10 @@ class PhotoDelegate(QStyledItemDelegate):
                 name = fm.elidedText(item.world_name, Qt.ElideRight,
                                      int(rf.width()) - tw - 26)
                 p.drawText(QRectF(rf.x() + 9, rf.bottom() - 24, rf.width() - 18, 18),
-                           Qt.AlignLeft | Qt.AlignVCenter, name)
+                           AL_LEFT_VCENTER, name)
             p.setPen(QColor(255, 255, 255, 170))
             p.drawText(QRectF(rf.x() + 9, rf.bottom() - 24, rf.width() - 18, 18),
-                       Qt.AlignRight | Qt.AlignVCenter, tm)
+                       AL_RIGHT_VCENTER, tm)
         # rating: small pips, only when the photo actually has one
         if item.rating:
             p.setPen(Qt.NoPen)

@@ -1,7 +1,7 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
 from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPoint, QPointF, QRectF,
                             QSize, Qt, QTimer, QVariantAnimation, Signal)
-from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen
+from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
                                QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel,
                                QLineEdit, QPushButton, QSlider, QVBoxLayout, QWidget)
@@ -75,6 +75,7 @@ class TimelineRail(QWidget):
         self._hover_y = None      # where the pointer is, for the month bubble
         self._bubble = None
         self._top_inset = 0       # room for whatever floats over the top of the grid
+        self._scale = None        # (key, pixmap) -- the ticks and labels
         self.setMouseTracking(True)
         self.setCursor(Qt.PointingHandCursor)
 
@@ -88,11 +89,13 @@ class TimelineRail(QWidget):
         px = max(0, int(px))
         if px != self._top_inset:
             self._top_inset = px
+            self._scale = None
             self.update()
 
     def set_marks(self, marks, total):
         self._marks = marks
         self._total = max(1, total)
+        self._scale = None
         self.setVisible(len(marks) > 1)
         self.update()
 
@@ -131,9 +134,37 @@ class TimelineRail(QWidget):
         return best
 
     def paintEvent(self, _ev):
+        """The scale is drawn once; only the position pip moves.
+
+        Every tick, every year label and two font changes were being redrawn on
+        every scrolled frame, for a picture that only changes when the library
+        or the window does. Profiled at a quarter of a millisecond a frame --
+        more than the whole glass header costs.
+        """
         if len(self._marks) < 2:
             return
         p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.drawPixmap(0, 0, self._scale_pixmap())
+
+        ac = style.accent(self._accent_key())
+        y = self._y_for(self._pos)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(ac["a"]))
+        p.drawRoundedRect(QRectF(self.WIDTH - 5 - 11, y - 2.5, 11, 5), 2.5, 2.5)
+
+    def _scale_pixmap(self):
+        key = (self.width(), self.height(), self._top_inset, len(self._marks),
+               self._marks[0] if self._marks else None,
+               self._marks[-1] if self._marks else None, self._total,
+               round(self.devicePixelRatioF(), 2))
+        if self._scale is not None and self._scale[0] == key:
+            return self._scale[1]
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.transparent)
+        p = QPainter(pm)
         p.setRenderHint(QPainter.Antialiasing, True)
         f = QFont()
         f.setPointSizeF(8.5)
@@ -166,12 +197,9 @@ class TimelineRail(QWidget):
                 p.drawText(QRectF(0, y - fm.height() / 2, right - 12, fm.height()),
                            Qt.AlignRight | Qt.AlignVCenter, year)
                 last_label = y
-
-        ac = style.accent(self._accent_key())
-        y = self._y_for(self._pos)
-        p.setPen(Qt.NoPen)
-        p.setBrush(QColor(ac["a"]))
-        p.drawRoundedRect(QRectF(right - 11, y - 2.5, 11, 5), 2.5, 2.5)
+        p.end()
+        self._scale = (key, pm)
+        return pm
 
         p.end()
 

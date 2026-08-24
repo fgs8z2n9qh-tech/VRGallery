@@ -405,6 +405,13 @@ class SmoothScroll(QObject):
         self._timer.setInterval(max(4, int(round(1000.0 / self.hz))))
 
     def eventFilter(self, obj, ev):
+        # The type check first, and nothing else before it. This filter sits on
+        # a viewport and sees EVERY event that reaches it -- thousands a second
+        # while the pointer is over the grid -- and all but the wheel ones are
+        # none of its business. Anything above this line is paid for by all of
+        # them.
+        if ev.type() != QEvent.Wheel:
+            return False
         try:
             mine = obj is self.view.viewport()
         except (RuntimeError, AttributeError):
@@ -417,7 +424,7 @@ class SmoothScroll(QObject):
             except (RuntimeError, AttributeError):
                 pass
             return False
-        if mine and ev.type() == QEvent.Wheel:
+        if mine:
             if ev.modifiers() & Qt.ControlModifier:
                 return False              # ctrl+wheel is a zoom, not a scroll
             if ev.angleDelta().x() and not ev.angleDelta().y():
@@ -740,12 +747,16 @@ class PageHead(QWidget):
         self._anim.start()
 
     def eventFilter(self, obj, ev):
+        # See SmoothScroll.eventFilter: the type check comes first because this
+        # one sees every event the viewport does, and cares about one of them.
+        if ev.type() != QEvent.Resize:
+            return False
         try:
             scroller = getattr(self, "_scroller", None)
             mine = scroller is not None and obj is scroller.viewport()
         except (RuntimeError, AttributeError):
             return False          # the scroller went away before its filter did
-        if mine and ev.type() == QEvent.Resize:
+        if mine:
             self.place()
             self.viewport_resized.emit()
         return super().eventFilter(obj, ev)
