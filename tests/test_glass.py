@@ -52,6 +52,13 @@ def panel(app):
     app.processEvents()
     yield host, source, bar
     host.hide()
+    # Deleted here, deliberately, rather than left to the garbage collector.
+    # A QWidget dropped without this is destroyed on the C++ side at whatever
+    # arbitrary later moment Python happens to collect it -- inside another
+    # test, often part-way through showing a window -- and the suite acquires
+    # an access violation that wanders about when you add a file.
+    host.deleteLater()
+    app.processEvents()
 
 
 # ------------------------------------------------------------------ the look
@@ -140,6 +147,8 @@ def test_a_floating_header_casts_a_shadow(app):
     assert 0 <= below < img.height()
     assert QColor(img.pixel(img.width() // 2, below)).alpha() > 0, "nothing under the bar"
     page.hide()
+    page.deleteLater()
+    app.processEvents()
 
 
 # ------------------------------------------------------------------ the cost

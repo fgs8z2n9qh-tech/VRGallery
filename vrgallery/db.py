@@ -180,8 +180,11 @@ class Database:
         self._conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_photos_session ON photos(session_id)")
 
+    closed = False        # see close(): slots check this before querying
+
     def close(self):
         with self._lock:
+            self.closed = True
             try:
                 self._conn.commit()
                 self._conn.close()

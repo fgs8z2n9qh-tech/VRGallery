@@ -325,6 +325,25 @@ class StickyDay(QWidget):
         p.end()
 
 
+def _rows_stamp(rows):
+    """Everything a query result could possibly change on screen, in one value.
+
+    Deliberately conservative: every column of every row goes in, so anything
+    that moves counts as a change and the grid is rebuilt. What it saves is the
+    case where nothing moved at all, which is most of them -- an index pass
+    re-runs the photo-to-session match on every photo and writes back the
+    answers it wrote last time, and while VRChat is running one of those passes
+    lands every seventeen seconds.
+
+    Returns None if the rows will not hash, which means "rebuild", never
+    "assume unchanged".
+    """
+    try:
+        return len(rows), hash(tuple(tuple(r) for r in rows))
+    except TypeError:
+        return None
+
+
 class GridPage(QWidget):
     back_requested = Signal()
 
@@ -458,6 +477,7 @@ class GridPage(QWidget):
         self.empty = widgets.EmptyState("image", "Nothing here",
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
+        self._shown = None                     # see refresh()
         self._rail_due = QTimer(self)          # see resizeEvent
         self._rail_due.setSingleShot(True)
         self._rail_due.timeout.connect(self._refresh_rail)
@@ -647,20 +667,30 @@ class GridPage(QWidget):
         # 'All' is one uninterrupted sheet of photos: no day headings, square
         # tiles, and almost no gap -- the library as a whole rather than as days
         dense = self.level == "all"
-        self.delegate.set_dense(dense)
-        self.view.setSpacing(2 if dense else 7)
-        self.model.set_photos(self._rows, group_by_day=not dense,
-                              top_gap=self.head_height())
+        stamp = (dense, self.head_height(), _rows_stamp(self._rows))
+        if stamp[2] is None or stamp != self._shown:
+            self._shown = stamp
+            self.delegate.set_dense(dense)
+            self.view.setSpacing(2 if dense else 7)
+            # beginResetModel drops the scroll position and the selection, so
+            # this is not merely 32 ms of work: an index pass that lands while
+            # you are scrolling throws you back to the top of the library.
+            self.model.set_photos(self._rows, group_by_day=not dense,
+                                  top_gap=self.head_height())
+            QTimer.singleShot(0, self._refresh_rail)   # after the view lays out
         n = len(self._rows)
         total = sum((r["filesize"] or 0) for r in self._rows)
         self.lab_sub.setText(f"{fmt.count_label(n)} {fmt.plural(n, 'photo')} · "
                              f"{fmt.human_size(total)}" if n else "No photos to show")
         self.empty.setVisible(n == 0)
-        QTimer.singleShot(0, self._refresh_rail)   # after the view lays out
         self._position_overlays()
 
     def refresh_soft(self):
-        """Re-query without resetting scroll if nothing structural changed upstream."""
+        """Re-query without resetting scroll if nothing structural changed.
+
+        Which is what refresh() does now, for every caller -- the check is on
+        the answer the query came back with, not on who asked.
+        """
         self.refresh()
 
     # ------- header handlers -------

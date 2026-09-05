@@ -446,6 +446,8 @@ class MainWindow(QMainWindow):
             self.lab_status.setText(text)
 
     def _on_index_done(self, stats):
+        if self.db.closed:
+            return
         if stats.get("auth"):
             self.cfg.add_self_names(stats["auth"])
         total = stats.get("total", 0)
@@ -468,6 +470,12 @@ class MainWindow(QMainWindow):
         self.start_index()
 
     def _on_deep_progress(self, done, total):
+        # A worker's last progress signal is queued before the pools drain and
+        # delivered after the window closed the database under it. Disconnecting
+        # the bridge on the way out does NOT cancel a call already posted, so
+        # the check has to be here, where the database is about to be read.
+        if self.db.closed:
+            return
         if total and done < total:
             self.lab_status.setText(f"Analyzing photos… {done}/{total}")
         elif total and done >= total:
@@ -1347,6 +1355,18 @@ class MainWindow(QMainWindow):
             self._index_worker.wait()
         pool_ok = self.svc.pool.waitForDone(5000)
         glob_ok = QThreadPool.globalInstance().waitForDone(3000)
+        # Draining the pools stops any NEW signal, but whatever those workers
+        # emitted on their way out is already sitting in the event queue as a
+        # queued call, addressed to slots that read the database -- and it is
+        # delivered after this function returns, which is after the close
+        # below. `Cannot operate on a closed database`, raised inside a Qt slot,
+        # where there is no caller to catch it: PySide prints it and, when
+        # stdout is being captured, the process goes down without a word.
+        # Cut the wires before closing what they lead to.
+        try:
+            self.bridge.disconnect()
+        except (RuntimeError, TypeError):
+            pass                 # nothing was connected; that is the goal anyway
         if pool_ok and glob_ok:
             self.db.close()      # otherwise leave it to the OS: a live worker
                                  # must never meet a closed sqlite connection

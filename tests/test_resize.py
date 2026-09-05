@@ -141,6 +141,43 @@ def test_the_view_is_not_left_re_wrapping_itself(page):
     assert page.view.resizeMode() == QListView.Fixed
 
 
+def test_maximising_and_restoring_still_re_wrap(page, app):
+    """A width change does not only arrive from a drag. Fixed mode re-wraps
+    nothing it is not told to, so every other route in has to be walked."""
+    _settle(app)
+    win = page.window()
+    windowed_w = page.view.viewport().width()
+    windowed = _per_row(page)
+    win.showMaximized()
+    _settle(app)
+    wide_w = page.view.viewport().width()
+    if wide_w == windowed_w:
+        pytest.skip("this screen maximises to the width the window already had")
+    # Which way it goes depends on the screen -- offscreen, "maximised" is
+    # NARROWER than the window the fixture asks for. What has to hold is that
+    # the wrap followed the width at all.
+    assert (_per_row(page) > windowed) == (wide_w > windowed_w), (
+        f"{_per_row(page)} tiles per row in a {wide_w} px viewport, against "
+        f"{windowed} in a {windowed_w} px one")
+    win.showNormal()
+    _settle(app)
+    assert _per_row(page) == windowed, "restoring kept the maximised wrap"
+
+
+def test_going_to_the_tray_and_back_does_not_lose_the_wrap(page, app):
+    """Hiding and showing takes the window through its own resize path."""
+    _settle(app)
+    before = _per_row(page)
+    win = page.window()
+    win.hide()
+    app.processEvents()
+    win.show_from_tray()
+    _settle(app)
+    assert _per_row(page) == before, (
+        f"{_per_row(page)} tiles per row after coming back from the tray, "
+        f"where there were {before}")
+
+
 # ---------------------------------------------------------------- the rail
 
 def test_the_month_rail_is_rebuilt_once_a_drag_ends_not_once_a_frame(page, app):
