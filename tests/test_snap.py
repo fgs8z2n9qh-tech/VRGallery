@@ -125,11 +125,15 @@ def test_the_wake_up_message_id_is_the_same_in_every_process():
     assert winutil.show_message_id() == first, "the id is not stable"
 
 
-def test_nothing_to_wake_when_nothing_is_running():
-    """No window carries the marker in this process, and the finder must not
-    return our own."""
-    assert winutil.find_other_instance() == 0
-    assert winutil.signal_existing_instance() is False
+def test_the_finder_never_returns_this_process():
+    """It must not find US -- a copy that woke itself would be a hang.
+
+    Asserting it finds NOTHING would be wrong: this machine has the real app
+    installed, and the test then passes or fails depending on whether it happens
+    to be running, which it was.
+    """
+    found = winutil.find_other_instance()
+    assert found == 0 or found[1] != os.getpid(), "it found its own window"
 
 
 def test_the_window_marker_is_a_property_not_a_title():
