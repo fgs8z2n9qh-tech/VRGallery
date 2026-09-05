@@ -8,6 +8,7 @@ from PySide6.QtCore import QSize, Qt, QThreadPool, QTimer
 from PySide6.QtGui import QIcon, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
                                QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
+                               QScrollArea,
                                QStackedWidget, QVBoxLayout, QWidget)
 
 from . import (backup, export, fmt, frame, icons, moments, paths, questimport, style,
@@ -71,7 +72,9 @@ class MainWindow(QMainWindow):
         self.auto_index = auto_index
         self.setWindowTitle(paths.APP_NAME)
         self.resize(1500, 920)
-        self.setMinimumSize(1080, 660)
+        # Small enough to be snapped to half of a 1920 screen (960 wide), and to
+        # a quarter (960x516). The old 1080x660 made both physically impossible.
+        self.setMinimumSize(840, 470)
 
         self.bridge = Bridge(self)
         self.svc = ThumbService(db, self.bridge, self)
@@ -124,9 +127,18 @@ class MainWindow(QMainWindow):
         sv.addLayout(brand)
         sv.addSpacing(14)
 
+        # The nav list scrolls when the window is too short for it. Twelve items
+        # want about 520 px and a window snapped to a quarter of a 1080-tall
+        # screen has 516; without this the buttons are squeezed past their own
+        # minimum and print over one another. Settings and the status line stay
+        # pinned below it either way.
+        nav_holder = QWidget()
+        nv = QVBoxLayout(nav_holder)
+        nv.setContentsMargins(0, 0, 0, 0)
+        nv.setSpacing(4)
         for entry in NAV:
             if entry is None:
-                sv.addSpacing(10)
+                nv.addSpacing(10)
                 continue
             key, label, icon_name = entry
             b = QPushButton("  " + label)
@@ -138,9 +150,17 @@ class MainWindow(QMainWindow):
             b.setIconSize(QSize(18, 18))
             b.clicked.connect(lambda _c=False, k=key: self.activate(k))
             self._nav_buttons[key] = b
-            sv.addWidget(b)
+            nv.addWidget(b)
+        nv.addStretch(1)
 
-        sv.addStretch(1)
+        self.nav_scroll = QScrollArea()
+        self.nav_scroll.setWidget(nav_holder)
+        self.nav_scroll.setWidgetResizable(True)
+        self.nav_scroll.setFrameShape(QScrollArea.NoFrame)
+        self.nav_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.nav_scroll.setMinimumHeight(0)
+        widgets.SmoothScroll(self.nav_scroll)
+        sv.addWidget(self.nav_scroll, 1)
         self.btn_settings = QPushButton("  Settings")
         self.btn_settings.setObjectName("NavBtn")
         self.btn_settings.setCheckable(True)

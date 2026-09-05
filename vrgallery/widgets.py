@@ -5,8 +5,9 @@ import time
 from PySide6.QtCore import (QEasingCurve, QEvent, QObject, QPoint, QPointF,
                             QPropertyAnimation, QRect, QRectF, QSize, Qt, QTimer,
                             QVariantAnimation, Signal)
-from PySide6.QtGui import (QColor, QGuiApplication, QImage, QLinearGradient,
-                           QPainter, QPainterPath, QPen, QPixmap, QRegion)
+from PySide6.QtGui import (QColor, QFontMetrics, QGuiApplication, QImage,
+                           QLinearGradient, QPainter, QPainterPath, QPen, QPixmap,
+                           QRegion)
 from PySide6.QtWidgets import (QComboBox, QFrame, QGraphicsOpacityEffect, QHBoxLayout,
                                QLabel, QLayout, QPushButton, QScrollArea, QSizePolicy,
                                QSlider, QSpinBox, QVBoxLayout, QWidget)
@@ -685,6 +686,55 @@ class GlassBar(QFrame):
         p.end()
 
 
+class ElidedLabel(QLabel):
+    """A label that ends in an ellipsis rather than demanding its full width.
+
+    A page header's subtitle is a sentence -- "34 black shots - deletes always
+    go to the Recycle Bin" -- and a plain QLabel asks the layout for every pixel
+    of it. In a half-screen window that one label was wider than the bar, so
+    there was nothing the fitting could do: everything else had already been
+    dropped and it still did not fit.
+    """
+
+    def __init__(self, text="", parent=None):
+        super().__init__(text, parent)
+        self._full = text
+        self.on_change = None
+        self.setMinimumWidth(0)
+        # Preferred, NOT Ignored: Ignored means "my sizeHint is meaningless",
+        # and a column of two Ignored labels reports a sizeHint of zero -- so
+        # the row handed the title nothing at all and it vanished at every
+        # width. The shrinking comes from minimumSizeHint being zero instead.
+        self.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Preferred)
+
+    def setText(self, text):
+        self._full = text
+        super().setText(text)
+        self.updateGeometry()
+        # The header caps this label's width from the text it holds, and the
+        # pages set that text long after the last resize -- without telling it,
+        # the cap stayed at the width of the empty string it was born with and
+        # the title never appeared at all.
+        if self.on_change is not None:
+            self.on_change()
+
+    def full_width(self):
+        return self.fontMetrics().horizontalAdvance(self._full) + 2
+
+    def minimumSizeHint(self):
+        h = super().minimumSizeHint()
+        return QSize(0, h.height())
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setPen(self.palette().color(self.foregroundRole()))
+        p.setFont(self.font())
+        fm = self.fontMetrics()
+        p.drawText(self.rect(), int(self.alignment()),
+                   fm.elidedText(self._full, Qt.ElideRight, self.width()))
+        p.end()
+
+
 class PageHead(QWidget):
     """The floating glass header every page wears.
 
@@ -708,6 +758,12 @@ class PageHead(QWidget):
         self._extra = None
         self._can_collapse = False
         self._collapsed = False
+        self._optional = []      # (drop order, widget) -- hidden when it will not fit
+        self._flex = []          # (widget, min width, max width)
+        self._denied = set()     # the PAGE says these do not belong here at all
+        self._dropped = set()    # ...and these only because there is no room
+        self._title_fit = 10 ** 6   # what `fit` will spare the title
+        self._title_open = 1.0      # ...and what `apply_collapse` leaves of it
 
         col = QVBoxLayout(self)
         col.setContentsMargins(0, 0, 0, self.MARGIN)   # room for the shadow
@@ -725,12 +781,19 @@ class PageHead(QWidget):
         tc = QVBoxLayout(self.titlecol)
         tc.setContentsMargins(0, 0, 0, 0)
         tc.setSpacing(0)
-        self.lab_title = QLabel(title)
+        self.lab_title = ElidedLabel(title)
         self.lab_title.setObjectName("PageHeaderTitle")
-        self.lab_sub = QLabel(sub)
+        self.lab_sub = ElidedLabel(sub)
         self.lab_sub.setObjectName("PageHeaderSub")
         tc.addWidget(self.lab_title)
         tc.addWidget(self.lab_sub)
+        self.lab_title.on_change = self._apply_title_width
+        self.lab_sub.on_change = self._apply_title_width
+        # The subtitle is the widest thing in the header and the least use --
+        # "1,761 photos - 14.6 GB" is 266 px, more than the whole level control.
+        # It goes before any actual control does; the sidebar already says which
+        # page you are on, and nothing else browses by year.
+        self._optional.append((0.5, self.lab_sub))
         self._title_fx = QGraphicsOpacityEffect(self.titlecol)
         self.titlecol.setGraphicsEffect(self._title_fx)
         row.addWidget(self.titlecol)
@@ -743,13 +806,15 @@ class PageHead(QWidget):
         self._anim.valueChanged.connect(self.apply_collapse)
 
     # ---- filling it ----
-    def add_left(self, w, spacing=0):
+    def add_left(self, w, spacing=0, drop=0):
         """Put a widget between the title and the gap, e.g. a segmented control."""
         if spacing:
             self.row.insertSpacing(self._stretch, spacing)
             self._stretch += 1
         self.row.insertWidget(self._stretch, w)
         self._stretch += 1
+        if drop:
+            self._optional.append((drop, w))
         return w
 
     def insert_front(self, w):
@@ -758,10 +823,49 @@ class PageHead(QWidget):
         self._stretch += 1
         return w
 
-    def add(self, w):
-        """Put a widget on the right-hand side."""
+    def add(self, w, drop=0):
+        """Put a widget on the right-hand side.
+
+        `drop` is how early it gives up its place when the window is too narrow
+        for everything: 1 goes first. Zero means it stays whatever happens.
+        """
         self.row.addWidget(w)
+        if drop:
+            self._optional.append((drop, w))
         return w
+
+    def add_flexible(self, w, low, high, drop=0):
+        """A widget that shrinks between two widths before anything is dropped.
+
+        The search box was a fixed 240 px, so in a narrow window it did not
+        shrink -- it pushed everything to its right off the end of the bar and
+        sat on top of it.
+        """
+        self.row.addWidget(w)
+        self._flex.append((w, low, high))
+        if drop:
+            self._optional.append((drop, w))
+        return w
+
+    def allow(self, w, on):
+        """The page's own say in whether a control belongs on this header.
+
+        Kept apart from `fit`'s dropping on purpose. They are different
+        statements -- "the level pills are meaningless on the Favourites page"
+        versus "there is no room for them in a window this narrow" -- and when
+        both wrote to setVisible() they overwrote each other: the pills came
+        back on pages that had no levels, and vanished from Photos.
+        """
+        if on:
+            self._denied.discard(w)
+        else:
+            self._denied.add(w)
+            self._dropped.discard(w)
+        w.setVisible(on)
+        self.fit()
+
+    def allows(self, w):
+        return w not in self._denied
 
     def set_extra_row(self, w):
         """A second row that rides with the header, e.g. the filter bar."""
@@ -868,6 +972,115 @@ class PageHead(QWidget):
         self._shadow = (key, pm)
         return pm
 
+    def _row_width(self):
+        """What the visible controls need, laid end to end."""
+        m = self.row.contentsMargins()
+        total = m.left() + m.right()
+        shown = 0
+        for i in range(self.row.count()):
+            it = self.row.itemAt(i)
+            w = it.widget()
+            if w is not None:
+                if w.isHidden():
+                    continue
+                # The floor, not the wish. Two separate traps here: a
+                # QLineEdit's sizeHint is its CONTENT (the search box asks for
+                # 297 px while setFixedWidth pins it at 240), and Qt will
+                # happily lay a combo box out below its sizeHint -- which is how
+                # this header fitted at all before any of this existed. Counting
+                # wishes made the row look fatter than it is and threw away
+                # controls there was room for; counting floors asks the right
+                # question, which is whether it fits at a width where you can
+                # still read it.
+                if w is self.titlecol:
+                    total += self._title_cost()
+                else:
+                    floor = max(w.minimumWidth(), w.minimumSizeHint().width())
+                    total += min(max(floor, 0), w.maximumWidth())
+                shown += 1
+            elif it.spacerItem() is not None and it.spacerItem().sizeHint().width():
+                total += it.spacerItem().sizeHint().width()
+                shown += 1
+        return total + self.row.spacing() * max(0, shown - 1)
+
+    def fit(self):
+        """Make the header fit the width it has, and degrade in a chosen order.
+
+        A row of fixed-width controls does not degrade in a narrow window, it
+        collapses: the pills lose their labels to blank rounded squares and the
+        search box lies across the sort box. So, in order:
+
+          1. everything that can shrink goes to its floor, so the question is
+             what genuinely does not fit rather than what would like more;
+          2. controls leave in a fixed order of usefulness -- the subtitle
+             before the size slider, the slider before the sort box, the sort
+             box before the level pills -- and a CHECKED control never leaves,
+             whatever its order, because it is the state you are in;
+          3. whatever was dropped is offered its place back, most useful first.
+             The order out cannot be the order back in: at some widths the level
+             pills have to go regardless, and once they have, there is room for
+             the things that were dropped ahead of them;
+          4. the title takes its natural width, and only then do the flexible
+             ones share what is left. The other way round, the search box ate
+             every spare pixel and the title sat at its floor -- "Pho..." -- in
+             a maximised window.
+
+        Everything droppable has another way in: Ctrl+wheel resizes the
+        thumbnails, and the rest are one wider window away.
+        """
+        avail = self.width() - self.MARGIN
+        if avail < 40:
+            return
+
+        for w, low, _high in self._flex:
+            if not w.isHidden():
+                w.setFixedWidth(low)
+        self._title_fit = self.TITLE_MIN
+        self._apply_title_width()
+
+        def pinned(w):
+            check = getattr(w, "isChecked", None)
+            return bool(check and check())
+
+        order = sorted(((pinned(w), prio, i, w)
+                        for i, (prio, w) in enumerate(self._optional)
+                        if w not in self._denied),
+                       key=lambda t: (t[0], t[1], t[2]))
+
+        hide_n = len(order)
+        for n in range(len(order) + 1):
+            for i, (_pin, _prio, _seq, w) in enumerate(order):
+                w.setVisible(i >= n)
+            self._apply_title_width()
+            if self._row_width() <= avail:
+                hide_n = n
+                break
+        self._dropped = {t[3] for t in order[:hide_n]}
+
+        # take back what still fits, the most useful of them first
+        for _pin, _prio, _seq, w in reversed(order[:hide_n]):
+            w.setVisible(True)
+            self._apply_title_width()
+            if self._row_width() <= avail:
+                self._dropped.discard(w)
+            else:
+                w.setVisible(False)
+                self._apply_title_width()
+
+        # Hand the room back: the things you type in first, then the title.
+        # A search box you cannot read a placeholder in is worse than a subtitle
+        # you cannot read the second half of.
+        for w, low, high in self._flex:
+            if w.isHidden():
+                continue
+            slack = avail - self._row_width()
+            if slack > 0:
+                w.setFixedWidth(int(min(high, low + slack)))
+        slack = avail - self._row_width()
+        if slack > 0:
+            self._title_fit = self.TITLE_MIN + slack
+            self._apply_title_width()
+
     def place(self):
         if self._scroller is None:
             return
@@ -880,12 +1093,56 @@ class PageHead(QWidget):
         self.setGeometry(tl.x() + self.MARGIN, 0,
                          max(160, vp.width() - self.MARGIN * 2),
                          self.sizeHint().height())
+        self.fit()
         self.raise_()
+
+    def _title_natural(self):
+        """As wide as the labels that are actually showing, and no wider."""
+        w = 0
+        for lab in (self.lab_title, self.lab_sub):
+            if not lab.isHidden():
+                w = max(w, lab.full_width())
+        return w
+
+    def _apply_title_width(self):
+        """Both claims on the title's width, resolved in one place.
+
+        The collapse animation and the narrow-window fitting were each writing
+        setMaximumWidth, so whichever ran last won and the other was simply
+        lost -- the title reappeared mid-collapse, or the collapse undid the
+        fitting and the header overflowed again.
+        """
+        natural = self._title_natural()
+        cap = max(0, int(min(natural, self._title_fit) * self._title_open))
+        # A floor as well as a cap, and the floor is what makes the subtitle
+        # cost something. Measured at a flat 64 px, showing the subtitle looked
+        # free -- so it was always restored, and then the column was capped at
+        # 64 anyway and BOTH lines came out as "Pho...". A visible subtitle now
+        # demands the width to read it, which is what makes the fitting drop it
+        # rather than mangle it. The floor collapses with everything else, or
+        # the title could never animate away.
+        self.titlecol.setMinimumWidth(min(cap, self._title_cost()))
+        self.titlecol.setMaximumWidth(cap)
+
+    TITLE_MIN = 132         # enough for the title LINE; the subtitle is extra
+
+    def _title_cost(self):
+        """What the title column needs to be readable, not what it is capped at.
+
+        Measured through the cap, a visible subtitle looked free -- the cap was
+        already at the floor, so restoring it cost nothing and then both lines
+        came out as "Pho...". Its cost has to be independent of the cap, or the
+        fitting can never decide to drop it.
+        """
+        natural = self._title_natural()
+        if not self.lab_sub.isHidden():
+            return int(natural * self._title_open)
+        return int(min(natural, self.TITLE_MIN) * self._title_open)
 
     def apply_collapse(self, t):
         """t: 0 fully open, 1 fully collapsed."""
-        w = self.titlecol.sizeHint().width()
-        self.titlecol.setMaximumWidth(max(0, int(w * (1 - t))))
+        self._title_open = max(0.0, 1.0 - t)
+        self._apply_title_width()
         self._title_fx.setOpacity(max(0.0, 1.0 - t * 1.6))
         pad = round(self.PAD_OPEN + (self.PAD_TIGHT - self.PAD_OPEN) * t)
         self.row.setContentsMargins(24, pad, 24, pad)

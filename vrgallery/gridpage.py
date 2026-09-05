@@ -355,13 +355,12 @@ class GridPage(QWidget):
             lv.addWidget(b)
         self.level_group.buttonClicked.connect(
             lambda b: self._level_clicked(b.property("level")))
-        self.headwrap.add_left(self.levels, spacing=18)
+        self.headwrap.add_left(self.levels, spacing=18, drop=5)
 
         self.search = QLineEdit()
         self.search.setObjectName("SearchBox")
         self.search.setPlaceholderText("Search world, person, file…")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(240)
         self.search.addAction(icons.qicon("search", style.PAL["faint"], 15),
                               QLineEdit.LeadingPosition)
         self._search_timer = QTimer(self)
@@ -369,7 +368,7 @@ class GridPage(QWidget):
         self._search_timer.setInterval(280)
         self._search_timer.timeout.connect(self._apply_search)
         self.search.textChanged.connect(lambda _t: self._search_timer.start())
-        self.headwrap.add(self.search)
+        self.headwrap.add_flexible(self.search, 132, 240)
 
         self.btn_fav = widgets.icon_btn("heart", "Favorites only", style.PAL["dim"],
                                         checkable=True)
@@ -379,8 +378,9 @@ class GridPage(QWidget):
         self.sort_box = widgets.ComboBox()
         self.sort_box.setObjectName("OnGlass")
         self.sort_box.addItems(["Newest first", "Oldest first"])
+        self.sort_box.setMinimumWidth(112)   # never squeezed to just an arrow
         self.sort_box.currentIndexChanged.connect(self._on_sort)
-        self.headwrap.add(self.sort_box)
+        self.headwrap.add(self.sort_box, drop=3)
 
         self.slider = widgets.Slider(Qt.Horizontal)
         self.slider.setRange(128, 264)
@@ -388,7 +388,7 @@ class GridPage(QWidget):
         self.slider.setFixedWidth(110)
         self.slider.setToolTip("Thumbnail size")
         self.slider.valueChanged.connect(self._on_slider)
-        self.headwrap.add(self.slider)
+        self.headwrap.add(self.slider, drop=2)
 
         self.btn_filter = widgets.icon_btn("filter", "More filters", style.PAL["dim"],
                                            checkable=True)
@@ -396,7 +396,7 @@ class GridPage(QWidget):
         self.headwrap.add(self.btn_filter)
         self.btn_play = widgets.icon_btn("play", "Slideshow", style.PAL["dim"])
         self.btn_play.clicked.connect(self._start_slideshow)
-        self.headwrap.add(self.btn_play)
+        self.headwrap.add(self.btn_play, drop=4)
         # the filter bar rides with the header as one floating overlay
         self.headwrap.set_extra_row(self._build_filter_bar())
 
@@ -533,7 +533,7 @@ class GridPage(QWidget):
         self.lab_title.setText(title)
         self.btn_back.setVisible(back)
         self._levels_on = levels
-        self.levels.setVisible(levels)
+        self.headwrap.allow(self.levels, levels)
         if not levels:
             self.level = "day"
             self._level_year = ""
@@ -585,7 +585,7 @@ class GridPage(QWidget):
     def _period_widgets_visible(self, periods):
         """Sorting, thumbnail size, filters and the rail are about photos."""
         for w in (self.sort_box, self.slider, self.btn_filter, self.btn_fav, self.btn_play):
-            w.setVisible(not periods)
+            self.headwrap.allow(w, not periods)
         if periods:
             self.btn_filter.setChecked(False)
         self.rail.setVisible(not periods and self.rail_has_marks())

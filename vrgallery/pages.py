@@ -166,12 +166,11 @@ class CardsPage(QWidget):
         self.search.setObjectName("SearchBox")
         self.search.setPlaceholderText("Filter…")
         self.search.setClearButtonEnabled(True)
-        self.search.setFixedWidth(220)
         self.search.addAction(icons.qicon("search", style.PAL["faint"], 15),
                               QLineEdit.LeadingPosition)
         self.search.textChanged.connect(self._apply_filter)
         if searchable:
-            self.head.add(self.search)
+            self.head.add_flexible(self.search, 120, 220)
         else:
             self.search.hide()
         self.model = CardModel(self)
@@ -917,10 +916,10 @@ class StatsPage(QWidget):
         self.cb_year.setObjectName("OnGlass")
         self.cb_year.setToolTip("Narrow every chart on this page to one year")
         self.cb_year.currentIndexChanged.connect(self._year_changed)
-        self.head.add(self.cb_year)
+        self.head.add(self.cb_year, drop=2)
         self.btn_year = widgets.ghost_btn("Year in review", "award", primary=True)
         self.btn_year.clicked.connect(self._year_review)
-        self.head.add(self.btn_year)
+        self.head.add(self.btn_year, drop=1)
         cards = QHBoxLayout()
         cards.setSpacing(12)
         self.c_total = widgets.StatCard("image")
@@ -1309,7 +1308,12 @@ class CleanupPage(QWidget):
             b.setProperty("mode", key)
             b.setMinimumWidth(b.sizeHint().width())   # never squeezed to ellipsis
             self.seg_group.addButton(b)
-            self.head.add(b)
+            # The rarely-used modes give up their place first; the mode you are
+            # in never does, so a narrow window cannot strand you.
+            # All five can go; `fit` will not drop whichever one is checked, so
+            # a narrow window can never strand you in a mode you cannot see.
+            self.head.add(b, drop={"deleted": 1, "huge": 2, "dupes": 3,
+                                   "burst": 4, "black": 5}.get(key, 6))
             if key == self.mode:
                 b.setChecked(True)
         self.seg_group.buttonClicked.connect(self._seg_clicked)

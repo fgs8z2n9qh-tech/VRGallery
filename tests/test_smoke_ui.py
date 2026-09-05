@@ -703,7 +703,10 @@ def test_browsing_zooms_from_years_to_months_to_days(window, app):
     window.db.upsert_photos(rows)
     window.activate("all")
     page = window.page_grid
-    assert not page.levels.isHidden(), "the level control belongs on Photos"
+    # allows(), not isHidden(): whether a control is on screen now also
+    # depends on how wide the window is, and this is a statement about the
+    # page, not about the width.
+    assert page.headwrap.allows(page.levels), "the level control belongs on Photos"
 
     def cards(page):
         """(index, payload) for the period cards, skipping the header spacer."""
@@ -724,7 +727,8 @@ def test_browsing_zooms_from_years_to_months_to_days(window, app):
     got = cards(page)
     assert [d["label"] for _ix, d in got] == ["2026", "2025", "2024"]  # newest first
     # the photo-only controls step aside at this level
-    assert page.slider.isHidden() and page.sort_box.isHidden()
+    head = page.headwrap
+    assert not head.allows(page.slider) and not head.allows(page.sort_box)
 
     page._open_from_index(card_for(page, "2024"))
     assert page.level == "month" and page._level_year == "2024"
@@ -735,7 +739,7 @@ def test_browsing_zooms_from_years_to_months_to_days(window, app):
     assert page.filter.date_from == "2024-03-01"
     assert page.filter.date_to == "2024-03-31"
     assert len(page.model.photos()) == 4
-    assert not page.slider.isHidden(), "the photo controls come back at Days"
+    assert head.allows(page.slider), "the photo controls come back at Days"
 
     page._level_clicked("day")                        # asking for Days means all days
     assert page.filter.date_from == "" and page.filter.date_to == ""
@@ -745,11 +749,11 @@ def test_browsing_zooms_from_years_to_months_to_days(window, app):
 def test_a_drill_page_has_no_level_control(window):
     """Years/Months only make sense for the whole library, not for one world."""
     window.activate("all")
-    assert not window.page_grid.levels.isHidden()
+    assert window.page_grid.headwrap.allows(window.page_grid.levels)
     window.push_person("Nobody At All")
     window.activate("all")
     window.page_grid.configure(window.page_grid.filter, "Someone", back=True)
-    assert window.page_grid.levels.isHidden()
+    assert not window.page_grid.headwrap.allows(window.page_grid.levels)
     assert window.page_grid.level == "day"
 
 
