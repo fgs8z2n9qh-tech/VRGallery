@@ -64,6 +64,11 @@ def main(argv=None):
     lock = QLockFile(paths.LOCK_PATH)
     lock.setStaleLockTime(0)
     if not args.shot and not lock.tryLock(100):
+        # Clicking the icon again should bring the app up, not tell you off for
+        # clicking it. The box is only for the case where the running copy
+        # cannot be found -- a stale lock, or a window that never opened.
+        if winutil.signal_existing_instance():
+            return 0
         QMessageBox.information(None, paths.APP_NAME, paths.APP_NAME + " is already running.")
         return 0
 

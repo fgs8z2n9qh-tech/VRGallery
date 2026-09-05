@@ -270,6 +270,95 @@ class SnapFilter:
             return False, 0
 
 
+# ------------------------------------------------- the one running instance
+
+SINGLE_PROP = "VRGalleryMainWindow"
+SW_SHOW = 5
+SW_RESTORE = 9
+ASFW_ANY = -1
+_show_msg = None
+_enum_cb = None          # EnumWindows keeps no reference; losing it crashes
+
+
+def show_message_id():
+    """A window message id both instances agree on, without sharing anything.
+
+    RegisterWindowMessage returns the same number for the same string in every
+    process on the desktop, which is exactly what two copies of one app need to
+    say one thing to each other.
+    """
+    global _show_msg
+    if _show_msg is None and os.name == "nt":
+        _show_msg = ctypes.windll.user32.RegisterWindowMessageW("VRGalleryShowWindow")
+    return _show_msg or 0
+
+
+def mark_main_window(hwnd):
+    """Tag the window so a second instance can pick it out of every window on
+    the desktop. The app's own title is empty -- it draws its own title bar --
+    so there is nothing else to recognise it by."""
+    if os.name != "nt":
+        return
+    try:
+        ctypes.windll.user32.SetPropW(wintypes.HWND(hwnd), SINGLE_PROP,
+                                      wintypes.HANDLE(1))
+    except Exception:
+        pass
+
+
+def find_other_instance():
+    """The main window of another copy of this app, or 0."""
+    global _enum_cb
+    if os.name != "nt":
+        return 0
+    found = []
+    me = os.getpid()
+    user32 = ctypes.windll.user32
+    proto = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+
+    def _cb(hwnd, _lparam):
+        pid = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value != me and user32.GetPropW(hwnd, SINGLE_PROP):
+            found.append((int(hwnd), pid.value))
+            return False
+        return True
+
+    _enum_cb = proto(_cb)
+    try:
+        user32.EnumWindows(_enum_cb, 0)
+    except Exception:
+        return 0
+    return found[0] if found else 0
+
+
+def signal_existing_instance():
+    """Ask the copy that is already running to come to the front. -> True if asked.
+
+    Telling it rather than doing it: the running instance may be hidden in the
+    tray, and ShowWindow from outside would put its native window back on screen
+    while Qt still believed it was hidden. It handles the message itself and
+    goes through the same path the tray icon uses.
+    """
+    other = find_other_instance()
+    if not other:
+        return False
+    hwnd, pid = other
+    user32 = ctypes.windll.user32
+    try:
+        # Windows refuses SetForegroundWindow to a process that is not already
+        # in front. THIS process is -- it was just launched -- so it can hand
+        # that right over to the one that will actually raise the window.
+        user32.AllowSetForegroundWindow(wintypes.DWORD(pid))
+    except Exception:
+        pass
+    try:
+        return bool(user32.PostMessageW(wintypes.HWND(hwnd),
+                                        wintypes.UINT(show_message_id()), 0, 0))
+    except Exception:
+        return False
+
+
 def dark_titlebar(hwnd):
     try:
         DWMWA_USE_IMMERSIVE_DARK_MODE = 20

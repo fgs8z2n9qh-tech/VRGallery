@@ -112,3 +112,40 @@ def test_the_styles_windows_snaps_are_the_ones_asked_for():
     body = inspect.getsource(winutil.snap_styles)
     for name in ("WS_THICKFRAME", "WS_MAXIMIZEBOX", "WS_MINIMIZEBOX", "SWP_FRAMECHANGED"):
         assert name in body, f"snap_styles no longer sets {name}"
+
+
+# ------------------------------------------------- one running instance
+
+def test_the_wake_up_message_id_is_the_same_in_every_process():
+    """RegisterWindowMessage is how two copies of an app agree on a number
+    without sharing anything. If it ever returned 0 the second copy would post
+    into the void and the box would come back."""
+    first = winutil.show_message_id()
+    assert first, "no message id registered"
+    assert winutil.show_message_id() == first, "the id is not stable"
+
+
+def test_nothing_to_wake_when_nothing_is_running():
+    """No window carries the marker in this process, and the finder must not
+    return our own."""
+    assert winutil.find_other_instance() == 0
+    assert winutil.signal_existing_instance() is False
+
+
+def test_the_window_marker_is_a_property_not_a_title():
+    """The app draws its own title bar and its window title is empty, so there
+    is nothing else on the desktop to recognise it by."""
+    import inspect
+    body = inspect.getsource(winutil.find_other_instance)
+    assert "GetPropW" in body and winutil.SINGLE_PROP
+    assert "GetWindowThreadProcessId" in body, "it could match its own window"
+
+
+def test_the_second_copy_hands_over_the_right_to_come_forward():
+    """Windows refuses SetForegroundWindow to a process that is not already in
+    front; without AllowSetForegroundWindow the window would only blink in the
+    taskbar."""
+    import inspect
+    body = inspect.getsource(winutil.signal_existing_instance)
+    assert "AllowSetForegroundWindow" in body
+    assert "PostMessageW" in body, "it must ask, not reach into the other process"

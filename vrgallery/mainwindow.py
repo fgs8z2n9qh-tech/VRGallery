@@ -73,11 +73,24 @@ class _SnapEventFilter(QAbstractNativeEventFilter):
     def __init__(self):
         super().__init__()
         self._impl = winutil.SnapFilter()
+        self.on_show = None          # set by the window that wants raising
 
     def watch(self, hwnd):
         self._impl.watch(hwnd)
 
     def nativeEventFilter(self, event_type, message):
+        # A second copy of the app asking this one to come to the front. It is
+        # handled here rather than by the launcher doing it from outside,
+        # because this instance may be sitting in the tray and only it knows how
+        # to come back properly.
+        try:
+            if self.on_show is not None and bytes(event_type) == b"windows_generic_MSG":
+                msg = winutil._MSG.from_address(int(message))
+                if msg.message and msg.message == winutil.show_message_id():
+                    self.on_show()
+                    return True, 0
+        except Exception:
+            pass
         return self._impl.nativeEventFilter(event_type, message)
 
 
@@ -1281,9 +1294,11 @@ class MainWindow(QMainWindow):
             self._snap_ready = winutil.snap_styles(int(self.winId()))
             if self._snap_ready:
                 _SNAP_FILTER.watch(int(self.winId()))
-                if not _SNAP_INSTALLED:
-                    QApplication.instance().installNativeEventFilter(_SNAP_FILTER)
-                    _SNAP_INSTALLED = True
+            winutil.mark_main_window(int(self.winId()))
+            _SNAP_FILTER.on_show = self.show_from_tray
+        if not _SNAP_INSTALLED:
+            QApplication.instance().installNativeEventFilter(_SNAP_FILTER)
+            _SNAP_INSTALLED = True
 
     def changeEvent(self, ev):
         super().changeEvent(ev)
