@@ -3,7 +3,7 @@ import time
 from collections import OrderedDict
 
 from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QObject, QPoint,
-                            QRect, QRectF, QSize, Qt, QUrl, Signal)
+                            QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap)
 from PySide6.QtWidgets import QListView, QStyle, QStyledItemDelegate, QAbstractItemView
@@ -342,6 +342,8 @@ class PhotoDelegate(QStyledItemDelegate):
         self._heads = OrderedDict()              # rendered day headers
         self._hover_id = None
         self._hover_t = 0.0
+        self._size_key = None                    # see _sizes()
+        self._sizes_now = None
 
     def set_accent(self, color):
         self._accent = color
@@ -412,17 +414,41 @@ class PhotoDelegate(QStyledItemDelegate):
         w = int((vw - (per_row - 1) * 14) / per_row)
         return QSize(w, int(w * 2 / 3))
 
+    def _sizes(self):
+        """The three fixed size hints, worked out once per layout instead of
+        once per row.
+
+        Laying the grid out asks for a size hint for every row there is -- two
+        and a quarter thousand of them here -- and a live window resize sends
+        one of those layouts per compositor frame. Each hint used to cost an
+        index.data() round trip into C++ and back (5.8 us, measured), a call to
+        viewport().width(), and a fresh QSize; nothing in any of that depends on
+        WHICH row is being asked about, only on its kind. Cached against the
+        four things they do depend on, a resize step fell from 28 ms to 9.
+        """
+        key = (self.view.viewport().width(), self.cell_w,
+               getattr(self, "dense", False), self.view.spacing())
+        if key != self._size_key:
+            vw = key[0]
+            self._size_key = key
+            self._sizes_now = (self.cell_size(), self.period_size(),
+                               QSize(max(80, vw - 24), 46), max(80, vw - 24))
+        return self._sizes_now
+
     def sizeHint(self, option, index):
-        kind = index.data(KindRole)
+        model = index.model()
+        kind, payload = (model.row_at(index.row()) if hasattr(model, "row_at")
+                         else (index.data(KindRole), index.data(ItemRole)))
+        cell, period, head, full_w = self._sizes()
+        if kind == KIND_PHOTO:
+            return cell
         if kind == KIND_SPACER:
-            vw = self.view.viewport().width()
-            return QSize(max(80, vw - 24), max(1, int(index.data(ItemRole) or 1)))
+            return QSize(full_w, max(1, int(payload or 1)))
         if kind == KIND_HEADER:
-            vw = self.view.viewport().width()
-            return QSize(max(80, vw - 24), 46)
+            return head
         if kind == KIND_PERIOD:
-            return self.period_size()
-        return self.cell_size()
+            return period
+        return cell
 
     # --- painting ---
     def paint(self, painter, option, index):
@@ -701,7 +727,8 @@ class GridView(QListView):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setViewMode(QListView.IconMode)
-        self.setResizeMode(QListView.Adjust)
+        # Fixed, and the re-wrap driven by hand from resizeEvent. See there.
+        self.setResizeMode(QListView.Fixed)
         self.setWrapping(True)
         self.setSpacing(7)
         self.setUniformItemSizes(False)
@@ -717,6 +744,10 @@ class GridView(QListView):
         self.setDragEnabled(True)
         self.setDragDropMode(QAbstractItemView.DragOnly)
         self.setDefaultDropAction(Qt.CopyAction)
+        self._relayout = QTimer(self)          # see resizeEvent
+        self._relayout.setSingleShot(True)
+        self._relayout.timeout.connect(self.scheduleDelayedItemsLayout)
+        self._last_resize = 0.0
         from . import widgets
         self.smooth = widgets.SmoothScroll(self)
         self.doubleClicked.connect(self._maybe_open)
@@ -750,8 +781,37 @@ class GridView(QListView):
     # So the lever here is the cost of a TILE, not the number of them.
 
     def resizeEvent(self, ev):
+        """Re-wrap when the drag settles, not on every frame of it.
+
+        Dragging a window edge sends one resize per compositor frame, and
+        re-wrapping this grid is not a per-frame job: two thousand rows, each
+        one a size hint out to Python and back, and the whole thing has to
+        finish before the view can paint. Measured on the real window at 180 Hz
+        it was 27 of the 32 ms a resize frame cost -- the window lagging six
+        frames behind the edge in your hand, which is what the flicker was.
+
+        ResizeMode.Adjust posts that relayout from QListView's own resizeEvent
+        and every paint flushes it, so Qt's own tenth-of-a-second wait never
+        got to expire. Fixed stops it posting one at all: the tiles hold the
+        wrap they have -- the window simply reveals or hides a column at the
+        right edge, which is what you want to SEE while dragging anyway -- and
+        the timer re-wraps once, when you stop.
+        """
         super().resizeEvent(ev)
-        self.scheduleDelayedItemsLayout()
+        if ev.size().width() == ev.oldSize().width():
+            return                # a taller window does not change the wrap
+        # One resize on its own is a maximise, a snap to half the screen, or the
+        # sidebar folding away, and there is nothing to wait for -- re-wrap now.
+        # A resize that follows hard on another one is a drag, and there will be
+        # sixty more of them: those wait for the last.
+        now = time.perf_counter()
+        drag = now - self._last_resize < 0.15
+        self._last_resize = now
+        if drag:
+            self._relayout.start(90)
+        else:
+            self._relayout.stop()
+            self.scheduleDelayedItemsLayout()
 
     def keyPressEvent(self, ev):
         if ev.key() in (Qt.Key_Return, Qt.Key_Enter):

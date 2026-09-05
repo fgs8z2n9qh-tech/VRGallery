@@ -1,5 +1,6 @@
 """The photo-grid page (used for: all photos, favorites, world/person/album/day drills)."""
-from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPoint, QPointF, QRectF,
+from PySide6.QtCore import (QDate, QEasingCurve, QEvent, QPoint, QPointF, QRect,
+                            QRectF,
                             QSize, Qt, QTimer, QVariantAnimation, Signal)
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QComboBox, QDateEdit,
@@ -100,8 +101,29 @@ class TimelineRail(QWidget):
         self.update()
 
     def set_pos(self, px):
-        self._pos = max(0.0, min(float(self._total), float(px)))
-        self.update()
+        """Move the position pip. Nothing else on the rail depends on this.
+
+        The rail is a nine-hundred-pixel strip and this used to repaint all of
+        it on every scrolled frame, to move an eleven-pixel pip that most of
+        those frames did not move at all: a whole year of photos is a couple of
+        hundred pixels of rail, so a wheel notch is worth well under one of
+        them. Repaint where the pip was and where it is going, and only when
+        those are different.
+        """
+        px = max(0.0, min(float(self._total), float(px)))
+        if px == self._pos:
+            return
+        before = self._pip_rect()
+        self._pos = px
+        after = self._pip_rect()
+        if before != after:
+            self.update(before.united(after))
+
+    def _pip_rect(self):
+        """Where the pip lands, in whole pixels with a pixel to spare around it
+        for the antialiasing."""
+        y = self._y_for(self._pos)
+        return QRect(self.WIDTH - 17, int(y) - 4, 13, 10)
 
     def _span(self):
         top = self._top_inset + self.PAD
@@ -436,6 +458,9 @@ class GridPage(QWidget):
         self.empty = widgets.EmptyState("image", "Nothing here",
                                         "Your VRChat shots will show up here.", self.view)
         self.empty.hide()
+        self._rail_due = QTimer(self)          # see resizeEvent
+        self._rail_due.setSingleShot(True)
+        self._rail_due.timeout.connect(self._refresh_rail)
         self.sticky = StickyDay(self)
         self.sticky.set_glass_source(self.view.viewport())
         self.selbar = widgets.SelectionBar(self)
@@ -691,6 +716,7 @@ class GridPage(QWidget):
         return marks, max(1, total)
 
     def _refresh_rail(self):
+        self._rail_due.stop()
         self.rail.set_top_inset(self.head_height())
         self.rail.set_marks(*self.rail_marks())
         self._sync_rail()
@@ -827,15 +853,20 @@ class GridPage(QWidget):
     def resizeEvent(self, ev):
         super().resizeEvent(ev)
         self._position_overlays()
-        QTimer.singleShot(0, self._refresh_rail)   # rewrapping moves every month
+        # Rewrapping moves every month, so the rail does have to be rebuilt --
+        # but ONCE, when the edge is let go of, not on every frame of the drag.
+        # Each mark costs a visualRect, that walks the whole laid-out grid, and
+        # three years of photos is three dozen marks: profiled at 10 ms of the
+        # 24 a resize step cost, which is most of the reason the window lagged
+        # behind its own frame while you dragged it. The marks it already has
+        # are the right months in nearly the right places until it settles.
+        self._rail_due.start(90)
 
     # The header, its collapse and its placement all live in widgets.PageHead
     # now, so that every other page wears the same one. What stays here is the
     # grid's own furniture: the pinned day, the selection bar, the empty state.
     def _viewport_resized(self):
         self._position_overlays()
-        if self.level == "all":           # square tiles are sized from the width
-            self.view.scheduleDelayedItemsLayout()
 
     def _apply_collapse(self, t):
         self.headwrap.apply_collapse(t)

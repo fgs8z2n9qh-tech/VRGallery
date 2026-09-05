@@ -664,21 +664,90 @@ class GlassBar(QFrame):
         self._tint = tint
         self._alpha = tint_alpha
         self._stamp = 0
+        self._due = QTimer(self)
+        self._due.setSingleShot(True)
+        self._due.setTimerType(Qt.PreciseTimer)
+        self._due.timeout.connect(self.update)
 
     def set_glass_source(self, w):
         self._glass_source = w
         self.update()
 
     def set_glass_stamp(self, v):
-        """Tell the glass its backdrop moved. Anything comparable will do."""
-        if v != self._stamp:
-            self._stamp = v
+        """Tell the glass its backdrop moved. Anything comparable will do.
+
+        Told, not obeyed. The surface underneath is rebuilt at most once per
+        TTL -- thirty times a second -- and a scroll on a 180 Hz display says
+        this six times as often as that. Every one of those extra repaints drew
+        the IDENTICAL cached pixmap, and because painting a widget repaints
+        every widget inside it, each one dragged all forty controls in the
+        header through a repaint to arrive at the same picture: measured on a
+        real scroll, 91% of the header's paints were that.
+
+        So a stamp that lands before the surface can have changed does not
+        repaint; it sets a timer for when it can, and one paint at the end of
+        the TTL covers every stamp that arrived during it. Nothing is lost --
+        the glass already only changed at TTL -- and nothing is delayed, the
+        deadline is the same one the rebuild had anyway.
+        """
+        if v == self._stamp:
+            return
+        self._stamp = v
+        wait = self._rebuild_due_in()
+        if wait <= 0.0:
+            self._due.stop()
             self.update()
+        elif not self._due.isActive():
+            self._due.start(max(1, int(wait * 1000.0)))
+
+    def _rebuild_due_in(self):
+        """Seconds until the cached surface goes stale; 0 if it already has.
+
+        Anything the cache would miss on -- no surface yet, a resize -- counts
+        as stale, so the answer is never a reason to skip a paint that would
+        have shown something new.
+        """
+        cached = getattr(self, "_glass_surface", None)
+        if cached is None or cached[1][0] != self.size():
+            return 0.0
+        return max(0.0, Glass.TTL - (time.perf_counter() - cached[0]))
+
+    def _stretch_instead(self):
+        """The last surface, when one is arriving faster than it can be built.
+
+        Dragging a window edge resizes this bar once per compositor frame --
+        180 times a second on this display -- and every part of the glass cache
+        is keyed on the size, so every one of those frames missed it and paid
+        the full 2.7 ms of blur, vibrance and refraction. Measured at 4.9 of
+        the 14.7 ms a resize frame cost.
+
+        So build it at the rate it can be built, TTL apart, exactly as while
+        the page scrolls underneath; the frames in between stretch the last
+        one. The cost of that is a few per cent of horizontal scale on a
+        picture that is already a blur, and only while the edge is moving.
+        """
+        cached = getattr(self, "_glass_surface", None)
+        if cached is None:
+            return None
+        when, key, _stamp, pm = cached
+        if pm.isNull() or key[0] == self.size():
+            return None                  # not a resize: the real cache serves it
+        age = time.perf_counter() - when
+        if age >= Glass.TTL:
+            return None                  # it has waited long enough; build it
+        if not self._due.isActive():     # and paint once more when it has
+            self._due.start(max(1, int((Glass.TTL - age) * 1000.0)))
+        return pm
 
     def paintEvent(self, ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.Antialiasing, True)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        stale = self._stretch_instead()
+        if stale is not None:
+            p.drawPixmap(self.rect(), stale)
+            p.end()
+            return
         if not Glass.paint(p, self, self._glass_source, radius=self._radius,
                            tint=self._tint or style.PAL["bg"], tint_alpha=self._alpha,
                            stamp=self._stamp):
@@ -772,6 +841,7 @@ class PageHead(QWidget):
         col.addWidget(self.bar)
         self._col = col
         self._shadow = None
+        self._placed = None      # see place()
 
         row = QHBoxLayout(self.bar)
         row.setContentsMargins(24, self.PAD_OPEN, 24, self.PAD_OPEN)
@@ -1090,9 +1160,23 @@ class PageHead(QWidget):
         # reads as a glitch rather than as depth.
         vp = self._scroller.viewport()
         tl = vp.mapTo(self.page, QPoint(0, 0))
-        self.setGeometry(tl.x() + self.MARGIN, 0,
-                         max(160, vp.width() - self.MARGIN * 2),
-                         self.sizeHint().height())
+        geo = QRect(tl.x() + self.MARGIN, 0,
+                    max(160, vp.width() - self.MARGIN * 2),
+                    self.sizeHint().height())
+        # One resize arrives here three times -- the viewport's own event
+        # filter, the viewport_resized that filter emits, and the page's
+        # resizeEvent -- and fit() is a millisecond and a half of showing and
+        # hiding controls to find out what fits. Twice out of three the answer
+        # is the one already on screen, so work out whether anything it depends
+        # on has moved and stop if it has not.
+        key = (geo, round(self._title_open, 3), len(self._denied),
+               self.lab_title.text(), self.lab_sub.text(),
+               tuple(bool(getattr(w, "isChecked", None) and w.isChecked())
+                     for _prio, w in self._optional))
+        if key == self._placed and geo == self.geometry():
+            return
+        self._placed = key
+        self.setGeometry(geo)
         self.fit()
         self.raise_()
 
