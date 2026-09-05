@@ -131,6 +131,11 @@ def main(argv=None):
                 if v._tags:
                     v._hover_tag = 0
                     v.update()
+            elif key.startswith("photo:"):          # e.g. photo:931, one exact shot
+                pid = int(key.split(":", 1)[1])
+                photos = win.page_grid.model.photos()
+                pos = next((i for i, it in enumerate(photos) if it.id == pid), 0)
+                win.open_lightbox(win.page_grid, photos, pos)
             elif key.startswith("scroll:"):         # e.g. scroll:4200, for the glass
                 win.activate("all")
                 page0 = win.page_grid

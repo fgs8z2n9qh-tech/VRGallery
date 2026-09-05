@@ -544,6 +544,15 @@ class Lightbox(QWidget):
             rl.addWidget(b)
         rl.addStretch(1)
 
+        # Only shown when the shot is not yours: on your own library that is
+        # every photo, and a "Shot by <you>" on all 1900 of them is noise.
+        self.p_shotby_head = QLabel("SHOT BY")
+        self.p_shotby_head.setObjectName("SectionLabel")
+        self.p_shotby = QPushButton("")
+        self.p_shotby.setObjectName("Chip")
+        self.p_shotby.setCursor(Qt.PointingHandCursor)
+        self.p_shotby.clicked.connect(self._shotby_clicked)
+
         self.p_avatar_head = QLabel("WORN")
         self.p_avatar_head.setObjectName("SectionLabel")
         self.p_avatar = QPushButton("")
@@ -590,6 +599,8 @@ class Lightbox(QWidget):
         pan.addWidget(self.p_rating_head)
         pan.addWidget(self.rating_row)
         pan.addSpacing(10)
+        pan.addWidget(self.p_shotby_head)
+        pan.addWidget(self.p_shotby)
         pan.addWidget(self.p_avatar_head)
         pan.addWidget(self.p_avatar, 0, Qt.AlignLeft)
         pan.addSpacing(10)
@@ -690,6 +701,12 @@ class Lightbox(QWidget):
             b.setIcon(icons.qicon("star", style.PAL["star"] if lit else style.PAL["faint"],
                                   17, 2.0, 1.8, style.PAL["star"] if lit else None))
 
+    def _shotby_clicked(self):
+        name = self.p_shotby.text().strip()
+        if name:
+            self.main.push_person(name)
+            self.close()
+
     def _rate(self, stars):
         it = self.current()
         if it:
@@ -701,18 +718,29 @@ class Lightbox(QWidget):
         wname = (row["world_name"] if row else None) or "Unknown world"
         self.p_world.setText(wname)
         src = row["meta_source"] if row else "none"
-        self.p_world_src.setText({"vrcx": "source: VRCX metadata",
+        self.p_world_src.setText({"vrchat": "source: VRChat photo metadata",
+                                  "vrcx": "source: VRCX metadata",
                                   "log": "source: VRChat log"}.get(src, "no log data"))
         itype = (row["instance_type"] if row else "") or ""
         if itype:
             label = vrclog.INSTANCE_LABELS.get(itype, itype)
             private = itype in vrclog.PRIVATE_INSTANCES
-            self.p_instance.setText(("🔒 " if private else "") + label + " instance")
+            region = (row["region"] if row else "") or ""
+            where = f"  ·  {vrclog.REGION_NAMES.get(region, region.upper())}" if region else ""
+            self.p_instance.setText(
+                ("🔒 " if private else "") + label + " instance" + where)
             self.p_instance.setStyleSheet(
                 "color:%s; font-size:11px;" % (style.PAL["star"] if private
                                                else style.PAL["faint"]))
         self.p_instance.setVisible(bool(itype))
         self.btn_world_link.setVisible(bool(it.world_id))
+        shot_by = (row["author_name"] if row and "author_name" in row.keys() else None)
+        mine = {n.lower() for n in (self.main.cfg.self_names or [])}
+        show_author = bool(shot_by) and shot_by.lower() not in mine
+        self.p_shotby_head.setVisible(show_author)
+        self.p_shotby.setVisible(show_author)
+        if show_author:
+            self.p_shotby.setText(shot_by)
         avatar = row["avatar_name"] if row else None
         self.p_avatar_head.setVisible(bool(avatar))
         self.p_avatar.setVisible(bool(avatar))

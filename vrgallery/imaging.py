@@ -68,9 +68,53 @@ def dhash_distance(a, b):
         return 64
 
 
-def parse_vrcx_text(text_chunks):
-    """VRCX screenshot-helper JSON from PNG text chunks.
-    -> (world_id, world_name, [(name, uid)]) or None."""
+KNOWN_WRITERS = ("vrchat", "vrcx", "screenshotmanager")
+
+# Bump when parse_photo_meta starts reading something new: a library indexed by
+# an older build gets its photos' metadata read again, without touching pixels.
+META_VERSION = 2
+
+
+def read_meta(path):
+    """The embedded metadata of one PNG, without decoding it.
+
+    Pillow reads the text chunks out of the header, so this costs a file open
+    and a few kilobytes -- which is what makes it cheap enough to re-read a
+    whole library when the parser learns a new field, instead of putting every
+    photo back through a full deep scan and rewriting every thumbnail.
+    """
+    try:
+        from PIL import Image
+        with Image.open(path) as im:
+            return parse_photo_meta(getattr(im, "text", None))
+    except Exception:
+        return None
+
+
+def parse_photo_meta(text_chunks):
+    """The JSON VRChat or VRCX embeds in a screenshot's PNG text chunks.
+
+    Both write the same shape -- VRCX modelled its helper on VRChat's own
+    metadata -- so one parser reads either, and says which it was:
+
+        {"application": "VRChat", "version": 1,
+         "author": {"id": "usr_...", "displayName": "..."},
+         "world":  {"id": "wrld_...", "name": "...",
+                    "instanceId": "wrld_...:51899~hidden(usr_...)~region(eu)"},
+         "players": [{"id": "usr_...", "displayName": "..."}, ...]}
+
+    Three things here that the old VRCX-only reader threw away, and that the
+    photos really carry -- of 600 in this library, 555 had all of them:
+
+      * the AUTHOR, which is who took the shot;
+      * the INSTANCE ID, which says whether you were in a public world, a
+        friends+ instance or a group one -- until now that could only come from
+        the logs, and VRChat deletes those after a few sessions;
+      * the region, which comes out of the same string.
+
+    -> dict, or None if there was nothing to read.
+    """
+    from . import vrclog
     for _key, val in (text_chunks or {}).items():
         if not isinstance(val, str) or "{" not in val:
             continue
@@ -82,31 +126,60 @@ def parse_vrcx_text(text_chunks):
             continue
         if not isinstance(data, dict):
             continue
-        if str(data.get("application", "")).lower() not in ("vrcx", "screenshotmanager"):
-            if "world" not in data:
-                continue
-        world = data.get("world") or {}
-        wid = world.get("id") if isinstance(world, dict) else None
-        wname = world.get("name") if isinstance(world, dict) else None
+        app = str(data.get("application", "")).lower()
+        if app not in KNOWN_WRITERS and "world" not in data:
+            continue
+        world = data.get("world") if isinstance(data.get("world"), dict) else {}
+        author = data.get("author") if isinstance(data.get("author"), dict) else {}
         players = []
-        for p in data.get("players") or []:
-            if isinstance(p, dict) and p.get("displayName"):
-                players.append((str(p["displayName"]), p.get("id")))
-        if wid or wname or players:
-            return wid, wname, players
+        for pl in data.get("players") or []:
+            if isinstance(pl, dict) and pl.get("displayName"):
+                players.append((str(pl["displayName"]), pl.get("id")))
+
+        # "wrld_xxx:51899~hidden(usr_y)~region(eu)" -- everything after the
+        # FIRST colon is what the log parser already knows how to read, so the
+        # two ways of learning an instance type cannot drift apart.
+        inst = str(world.get("instanceId") or "")
+        itype, region = "", ""
+        if inst:
+            itype, region = vrclog.parse_instance(inst.split(":", 1)[-1])
+
+        out = {
+            "source": "vrchat" if app == "vrchat" else "vrcx",
+            "world_id": world.get("id") or None,
+            "world_name": world.get("name") or None,
+            "instance_id": inst or None,
+            "instance_type": itype or "",
+            "region": region or "",
+            "author_name": str(author["displayName"]) if author.get("displayName") else None,
+            "author_id": author.get("id") or None,
+            "players": players,
+        }
+        if any((out["world_id"], out["world_name"], out["players"],
+                out["author_name"], out["instance_type"])):
+            return out
     return None
+
+
+def parse_vrcx_text(text_chunks):
+    """Kept for callers that only want the three things it used to return."""
+    meta = parse_photo_meta(text_chunks)
+    if meta is None:
+        return None
+    return meta["world_id"], meta["world_name"], meta["players"]
 
 
 def deep_scan(path, key):
     """Single decode pass: writes the disk thumbnail and returns
-    dict(width, height, luma, dhash, vrcx) — vrcx may be None."""
+    dict(width, height, luma, dhash, vrcx) — vrcx is parse_photo_meta's dict
+    or None."""
     out = thumb_path(key)
     with Image.open(path) as im:
         im.load()
         vrcx = None
         if im.format == "PNG":
             try:
-                vrcx = parse_vrcx_text(getattr(im, "text", None))
+                vrcx = parse_photo_meta(getattr(im, "text", None))
             except Exception:
                 vrcx = None
         im = ImageOps.exif_transpose(im)

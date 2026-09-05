@@ -49,6 +49,11 @@ INSTANCE_LABELS = {
 PRIVATE_INSTANCES = {"friends+", "friends", "invite+", "invite", "group-members"}
 
 
+# VRChat's server region codes, spelled out
+REGION_NAMES = {"eu": "Europe", "us": "US East", "use": "US East", "usw": "US West",
+                "usx": "US", "jp": "Japan"}
+
+
 def parse_instance(descriptor):
     """-> (instance_type, region). `descriptor` is everything after 'wrld_…:'."""
     if not descriptor:

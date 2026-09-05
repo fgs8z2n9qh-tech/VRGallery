@@ -12,15 +12,15 @@ from PySide6.QtWidgets import (QAbstractItemView, QButtonGroup, QCheckBox, QComb
                                QStyledItemDelegate, QVBoxLayout, QWidget)
 
 from . import (backup, charts, fmt, icons, imaging, moments, paths, questimport, style,
-               widgets, winutil)
+               vrclog, widgets, winutil)
 from .db import PhotoFilter
 from .gridmodel import MiniItem
 
 CardRole = Qt.UserRole + 1
 
-# VRChat's server region codes, spelled out
-REGION_NAMES = {"eu": "Europe", "us": "US East", "use": "US East", "usw": "US West",
-                "usx": "US", "jp": "Japan"}
+# Lives with parse_instance, which is where regions are read out of an
+# instance id; re-exported here because the charts have always used this name.
+REGION_NAMES = vrclog.REGION_NAMES
 
 
 def page_header(title, sub=""):

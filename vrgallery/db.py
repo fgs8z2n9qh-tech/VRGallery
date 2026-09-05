@@ -161,7 +161,8 @@ class Database:
                           ("instance_type", "TEXT"), ("region", "TEXT"),
                           ("rating", "INTEGER DEFAULT 0"),
                           ("is_video", "INTEGER DEFAULT 0"),
-                          ("deleted_at", "TEXT")):
+                          ("deleted_at", "TEXT"),
+                          ("author_name", "TEXT"), ("author_id", "TEXT")):
             if col not in have:
                 self._conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {decl}")
         have_t = {r["name"] for r in self._conn.execute("PRAGMA table_info(photo_tags)")}
@@ -248,16 +249,34 @@ class Database:
                 (width, height, luma, dhash, pid))
             self._conn.commit()
 
-    def set_meta_vrcx(self, pid, world_id, world_name, players):
+    def set_meta_photo(self, pid, meta):
+        """What the photo file itself says, from imaging.parse_photo_meta.
+
+        The instance type and region are only written when the metadata
+        actually carried them: log correlation may already have filled them in,
+        and a photo without an instanceId must not blank that out.
+        """
         with self._lock:
             self._conn.execute(
-                "UPDATE photos SET world_id=?, world_name=?, meta_source='vrcx' WHERE id=?",
-                (world_id, world_name, pid))
+                "UPDATE photos SET world_id=?, world_name=?, meta_source=?,"
+                " author_name=?, author_id=? WHERE id=?",
+                (meta.get("world_id"), meta.get("world_name"),
+                 meta.get("source") or "vrcx",
+                 meta.get("author_name"), meta.get("author_id"), pid))
+            if meta.get("instance_type"):
+                self._conn.execute(
+                    "UPDATE photos SET instance_type=?, region=? WHERE id=?",
+                    (meta["instance_type"], meta.get("region") or "", pid))
             self._conn.execute("DELETE FROM photo_players WHERE photo_id=?", (pid,))
             self._conn.executemany(
                 "INSERT OR IGNORE INTO photo_players(photo_id, name, user_id) VALUES(?,?,?)",
-                [(pid, n, u) for n, u in players])
+                [(pid, n, u) for n, u in meta.get("players") or []])
             self._conn.commit()
+
+    def set_meta_vrcx(self, pid, world_id, world_name, players):
+        """The older three-argument form, for anything still calling it."""
+        self.set_meta_photo(pid, {"world_id": world_id, "world_name": world_name,
+                                  "players": players, "source": "vrcx"})
 
     def apply_log_matches(self, matches, keep_avatars=False):
         """matches: list of dicts with keys
@@ -1087,6 +1106,14 @@ class Database:
                 "SELECT id, path, taken_at, day, world_name, favorite, filesize, mtime "
                 "FROM photos WHERE missing=0 AND is_video=0 "
                 "ORDER BY filesize DESC LIMIT ?", (limit,)).fetchall()
+
+    def photos_for_meta_reread(self):
+        """(id, path) for every photo still on disk, oldest first."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, path FROM photos WHERE missing=0 AND is_video=0"
+                " ORDER BY id").fetchall()
+        return [(r["id"], r["path"]) for r in rows]
 
     # ---------- meta kv ----------
 

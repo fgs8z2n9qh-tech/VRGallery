@@ -134,14 +134,36 @@ class IndexWorker(QThread):
                 rec.update(session_id=sid, world_id=wid, world_name=wname,
                            source="log", players=players, avatar=matcher.avatar_at(dt),
                            instance_type=itype, region=region)
-            if r["meta_source"] == "vrcx":
-                rec["source"] = "vrcx"
+            if r["meta_source"] in ("vrcx", "vrchat"):
+                rec["source"] = r["meta_source"]
             matches.append(rec)
             if len(matches) >= 800:
                 self.db.apply_log_matches(matches, keep_avatars)
                 matches = []
                 b.index_progress.emit("Matching photos to logs…", i + 1, len(rows))
         self.db.apply_log_matches(matches, keep_avatars)
+
+        # AFTER the log matching, not before. Photos already in the library were
+        # read by an older parser that threw away the photographer and the
+        # instance, and re-reading them is only a file open each -- the metadata
+        # is in the PNG header, so this goes nowhere near the pixels or the
+        # thumbnails. It has to run last because apply_log_matches writes
+        # instance_type from the SESSION, and a photo whose session VRChat has
+        # already deleted the log for gets an empty one; run first, the sweep's
+        # answer was overwritten and only 112 of 1900 photos kept an instance.
+        # What the file itself says beats what was inferred from a log, which is
+        # the same rule apply_log_matches already states for the world.
+        if str(self.db.get_meta("photo_meta_version")) != str(imaging.META_VERSION):
+            todo = self.db.photos_for_meta_reread()
+            for i, (pid, path) in enumerate(todo):
+                if self.isInterruptionRequested():
+                    return
+                if i % 200 == 0:
+                    b.index_progress.emit("Re-reading photo metadata…", i, len(todo))
+                meta = imaging.read_meta(path)
+                if meta:
+                    self.db.set_meta_photo(pid, meta)
+            self.db.set_meta("photo_meta_version", imaging.META_VERSION)
 
         total, size, favs = self.db.counts()
         b.index_done.emit({"new": new_count, "auth": sorted(auth),
@@ -223,8 +245,7 @@ class ThumbService(QObject):
                     self.db.set_deep(job.pid, res["width"], res["height"],
                                      res["luma"], res["dhash"])
                     if res["vrcx"]:
-                        wid, wname, players = res["vrcx"]
-                        self.db.set_meta_vrcx(job.pid, wid, wname, players)
+                        self.db.set_meta_photo(job.pid, res["vrcx"])
                         self.bridge.meta_changed.emit(job.pid)
                 except Exception:
                     self.db.set_deep(job.pid, 0, 0, None, None)
