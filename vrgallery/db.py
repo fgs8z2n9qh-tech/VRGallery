@@ -933,6 +933,26 @@ class Database:
             b = self._conn.execute("SELECT COUNT(*) c FROM photo_players").fetchone()
         return (a["c"], a["m"], b["c"], tuple(sorted(self_names)))
 
+    def sessions_stamp(self, self_names=()):
+        """Cheap fingerprint of everything the session list is built from.
+
+        The page tears down and rebuilds every card, every people chip and every
+        thumbnail strip on each visit, which measured 93 ms on a library of 160
+        sessions -- felt every single time you click Sessions, for a list that
+        had not changed. The photo count is in here because deleting a shot
+        changes a card's tally and its cover.
+        """
+        with self._lock:
+            a = self._conn.execute(
+                "SELECT COUNT(*) c, MAX(start_at) m FROM sessions").fetchone()
+            b = self._conn.execute(
+                "SELECT COUNT(*) c, MAX(id) m FROM photos"
+                " WHERE session_id IS NOT NULL AND missing=0"
+                " AND deleted_at IS NULL").fetchone()
+            c = self._conn.execute(
+                "SELECT COUNT(*) c FROM session_players").fetchone()
+        return (a["c"], a["m"], b["c"], b["m"], c["c"], tuple(sorted(self_names)))
+
     def moment_rows(self):
         with self._lock:
             return self._conn.execute(

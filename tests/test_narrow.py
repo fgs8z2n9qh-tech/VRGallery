@@ -145,3 +145,64 @@ def test_a_control_the_page_does_not_want_is_not_brought_back_by_a_wide_window(w
     head.allow(page.levels, True)
     head.place()
     assert page.levels.isVisible()
+
+
+# --------------------------------------------- pages that fill in behind you
+
+def _drain(app, rounds=400):
+    """Let every queued fill step run."""
+    for _ in range(rounds):
+        app.processEvents()
+
+
+def test_a_long_card_list_still_ends_up_complete(app):
+    """The cards below the fold are added between frames instead of blocking
+    the page for 270 ms. All of them still have to arrive."""
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    page = QWidget()
+    box = QVBoxLayout(page)
+    items = list(range(50))
+    widgets.fill_progressively(page, box, items, lambda i: QLabel(str(i)), first=5, chunk=7)
+
+    made = [box.itemAt(i).widget() for i in range(box.count())]
+    assert sum(1 for w in made if w is not None) == 5, "more than the first screenful blocked"
+    _drain(app)
+    labels = [box.itemAt(i).widget() for i in range(box.count())]
+    texts = [w.text() for w in labels if w is not None]
+    assert texts == [str(i) for i in items], "the rest never arrived, or arrived out of order"
+
+
+def test_a_second_fill_abandons_the_first(app):
+    """Navigating away and back mid-fill must not leave cards from the old list
+    interleaved with the new one."""
+    from PySide6.QtWidgets import QLabel, QVBoxLayout, QWidget
+    page = QWidget()
+    box = QVBoxLayout(page)
+    widgets.fill_progressively(page, box, list(range(40)), lambda i: QLabel(f"old{i}"),
+                               first=2, chunk=3)
+    # a new refresh before the first one finished
+    while box.count():
+        it = box.takeAt(0)
+        if it.widget():
+            it.widget().deleteLater()
+    widgets.fill_progressively(page, box, list(range(6)), lambda i: QLabel(f"new{i}"),
+                               first=2, chunk=2)
+    _drain(app)
+    texts = [box.itemAt(i).widget().text() for i in range(box.count())
+             if box.itemAt(i).widget() is not None]
+    assert texts == [f"new{i}" for i in range(6)], f"stale cards leaked in: {texts}"
+
+
+def test_the_sessions_page_does_not_rebuild_when_nothing_changed(window, app):
+    """93 ms of teardown and rebuild, on every single visit, for a list that had
+    not changed."""
+    window.activate("sessions")
+    _drain(app, 200)
+    page = window.page_sessions
+    before = page._stamp
+    assert before is not None, "the page never took a fingerprint"
+    marker = object()
+    page._sentinel = marker
+    page.refresh()
+    assert page._stamp == before
+    assert getattr(page, "_sentinel", None) is marker

@@ -1217,6 +1217,38 @@ class Slider(_PassWheel, QSlider):
     pass
 
 
+def fill_progressively(page, layout, items, make, first=8, chunk=10):
+    """Add the first few cards now and the rest between frames.
+
+    Measured on a real library: the Moments page spent 289 ms in refresh(), of
+    which the detection was 17 -- the other 270 was building eighty-three cards
+    and their thumbnail strips, with the window frozen for all of it. Only the
+    first few are on screen, and the rest are behind a scroll.
+
+    A generation counter guards it: navigating away or refreshing again while a
+    fill is still running abandons the old one, so cards from a stale list can
+    never land in the new page.
+    """
+    page._fill_gen = getattr(page, "_fill_gen", 0) + 1
+    gen = page._fill_gen
+    for item in items[:first]:
+        layout.addWidget(make(item))
+    layout.addStretch(1)
+    if len(items) <= first:
+        return
+
+    def step(i):
+        if getattr(page, "_fill_gen", None) != gen:
+            return                       # a newer refresh took over
+        end = min(len(items), i + chunk)
+        for k in range(i, end):
+            layout.insertWidget(layout.count() - 1, make(items[k]))
+        if end < len(items):
+            QTimer.singleShot(0, lambda: step(end))
+
+    QTimer.singleShot(0, lambda: step(first))
+
+
 def scroll_body(page, left=24, right=16, bottom=20, spacing=12):
     """A page's scrolling body, in the shape a floating header expects.
 

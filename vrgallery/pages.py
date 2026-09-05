@@ -329,6 +329,7 @@ class SessionsPage(QWidget):
         super().__init__(parent)
         self.main = main
         self.cache = cache
+        self._stamp = None
         self.scroll, self.holder, self.vbox = widgets.scroll_body(self)
         self.head = widgets.PageHead(self, "Sessions")
         self.lab_title, self.lab_sub = self.head.lab_title, self.head.lab_sub
@@ -342,7 +343,15 @@ class SessionsPage(QWidget):
             "A session is one visit to one world. They come from the VRChat logs, "
             f"so keep {paths.APP_NAME} running while you play.")
 
-    def refresh(self):
+    def refresh(self, force=False):
+        # Same guard MomentsPage has had all along: rebuilding 160 session
+        # cards, their people chips and their thumbnail strips took 93 ms, and
+        # it ran on every single visit whether or not anything had changed.
+        selfn = sorted(self.main.cfg.self_names)
+        stamp = self.main.db.sessions_stamp(selfn)
+        if not force and stamp == self._stamp and self.vbox.count():
+            return
+        self._stamp = stamp
         while self.vbox.count():
             it = self.vbox.takeAt(0)
             if it.widget():
@@ -354,11 +363,9 @@ class SessionsPage(QWidget):
             self.lab_sub.setText("Nothing recorded yet")
             return
         self.lab_sub.setText(f"{len(rows)} {fmt.plural(len(rows), 'session')} with photos")
-        selfn = sorted(self.main.cfg.self_names)
         covers = self.main.db.photos_by_ids([r["cover_id"] for r in rows])
-        for r in rows:
-            self.vbox.addWidget(self._session_card(r, selfn, covers))
-        self.vbox.addStretch(1)
+        widgets.fill_progressively(
+            self, self.vbox, rows, lambda r: self._session_card(r, selfn, covers))
 
     def _session_card(self, r, selfn, covers):
         sid = r["id"]
@@ -583,9 +590,7 @@ class MomentsPage(QWidget):
             return
         self.lab_sub.setText(f"{len(self._moments)} found automatically · "
                              "turn any of them into an album")
-        for m in self._moments[:120]:
-            self.vbox.addWidget(self._card(m))
-        self.vbox.addStretch(1)
+        widgets.fill_progressively(self, self.vbox, self._moments[:120], self._card)
 
     def _card(self, m):
         card = widgets.Card()
