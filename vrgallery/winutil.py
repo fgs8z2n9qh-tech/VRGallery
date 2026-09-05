@@ -148,6 +148,128 @@ def open_recycle_bin():
         return False
 
 
+# ---------------------------------------------------------------- Aero Snap
+
+GWL_STYLE = -16
+WS_CAPTION = 0x00C00000
+WS_THICKFRAME = 0x00040000
+WS_MINIMIZEBOX = 0x00020000
+WS_MAXIMIZEBOX = 0x00010000
+WM_NCCALCSIZE = 0x0083
+SWP_FRAMECHANGED = 0x0020
+SWP_NOMOVE = 0x0002
+SWP_NOSIZE = 0x0001
+SWP_NOZORDER = 0x0004
+SWP_NOACTIVATE = 0x0010
+SM_CXSIZEFRAME = 32
+SM_CYSIZEFRAME = 33
+SM_CXPADDEDBORDER = 92
+MONITOR_DEFAULTTONEAREST = 2
+
+
+class _RECT(ctypes.Structure):
+    _fields_ = [("left", wintypes.LONG), ("top", wintypes.LONG),
+                ("right", wintypes.LONG), ("bottom", wintypes.LONG)]
+
+
+class _MSG(ctypes.Structure):
+    _fields_ = [("hwnd", wintypes.HWND), ("message", wintypes.UINT),
+                ("wParam", ctypes.c_size_t), ("lParam", ctypes.c_ssize_t),
+                ("time", wintypes.DWORD), ("pt_x", wintypes.LONG),
+                ("pt_y", wintypes.LONG)]
+
+
+class _MONITORINFO(ctypes.Structure):
+    _fields_ = [("cbSize", wintypes.DWORD), ("rcMonitor", _RECT),
+                ("rcWork", _RECT), ("dwFlags", wintypes.DWORD)]
+
+
+def snap_styles(hwnd):
+    """Give a frameless window the styles Windows snaps, and keep it frameless.
+
+    Qt's FramelessWindowHint produces a WS_POPUP window, and Windows will not
+    snap one: not by dragging it to an edge, not with Win+Left, not with the
+    snap-layout flyout. Aero Snap is a property of a SIZEABLE window with a
+    maximize box, so the window has to have WS_THICKFRAME and WS_MAXIMIZEBOX --
+    and then the frame those imply has to be taken back off in WM_NCCALCSIZE,
+    or Windows draws its own title bar and border over the app's.
+
+    startSystemMove() was never enough on its own. It hands the drag to the
+    compositor, which is what makes the drag smooth, but the compositor only
+    offers to snap what the window styles say is snappable.
+    """
+    if os.name != "nt":
+        return False
+    try:
+        user32 = ctypes.windll.user32
+        style = user32.GetWindowLongW(wintypes.HWND(hwnd), GWL_STYLE)
+        want = style | WS_THICKFRAME | WS_MAXIMIZEBOX | WS_MINIMIZEBOX | WS_CAPTION
+        if want != style:
+            user32.SetWindowLongW(wintypes.HWND(hwnd), GWL_STYLE, want)
+            user32.SetWindowPos(wintypes.HWND(hwnd), None, 0, 0, 0, 0,
+                                SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE
+                                | SWP_NOZORDER | SWP_NOACTIVATE)
+        return True
+    except Exception:
+        return False
+
+
+def _frame_thickness():
+    try:
+        g = ctypes.windll.user32.GetSystemMetrics
+        return (g(SM_CXSIZEFRAME) + g(SM_CXPADDEDBORDER),
+                g(SM_CYSIZEFRAME) + g(SM_CXPADDEDBORDER))
+    except Exception:
+        return 8, 8
+
+
+def _is_maximized(hwnd):
+    try:
+        return bool(ctypes.windll.user32.IsZoomed(wintypes.HWND(hwnd)))
+    except Exception:
+        return False
+
+
+class SnapFilter:
+    """Cancels the non-client frame that `snap_styles` had to add.
+
+    Only WM_NCCALCSIZE is touched, and only to say "the client area is the whole
+    window" -- which is what keeps the app looking frameless while Windows
+    treats it as an ordinary sizeable window for snapping.
+
+    The one exception is a MAXIMISED window. Windows sizes a maximised window to
+    the work area PLUS its frame, expecting the frame to be cropped off; with
+    the frame cancelled outright, the client would spill over the taskbar. So
+    while maximised the frame is inset by hand instead.
+    """
+
+    def __init__(self, hwnds=None):
+        self._hwnds = hwnds if hwnds is not None else set()
+
+    def watch(self, hwnd):
+        self._hwnds.add(int(hwnd))
+
+    def nativeEventFilter(self, event_type, message):
+        try:
+            if bytes(event_type) != b"windows_generic_MSG":
+                return False, 0
+            msg = _MSG.from_address(int(message))
+            if msg.message != WM_NCCALCSIZE or not msg.wParam:
+                return False, 0
+            if int(msg.hwnd) not in self._hwnds:
+                return False, 0
+            if _is_maximized(int(msg.hwnd)):
+                dx, dy = _frame_thickness()
+                r = _RECT.from_address(msg.lParam)
+                r.left += dx
+                r.top += dy
+                r.right -= dx
+                r.bottom -= dy
+            return True, 0            # client area == window rect
+        except Exception:
+            return False, 0
+
+
 def dark_titlebar(hwnd):
     try:
         DWMWA_USE_IMMERSIVE_DARK_MODE = 20

@@ -4,7 +4,8 @@ import re
 import tempfile
 from datetime import datetime
 
-from PySide6.QtCore import QSize, Qt, QThreadPool, QTimer
+from PySide6.QtCore import (QAbstractNativeEventFilter, QSize, Qt, QThreadPool,
+                            QTimer)
 from PySide6.QtGui import QIcon, QImage, QKeySequence, QShortcut
 from PySide6.QtWidgets import (QApplication, QFileDialog, QFrame, QHBoxLayout, QInputDialog,
                                QLabel, QMainWindow, QMenu, QMessageBox, QPushButton,
@@ -60,6 +61,30 @@ def _nav_icon(name):
 NO_EDGE = Qt.Edges()      # built once: the empty flag is awkward to construct
 
 
+class _SnapEventFilter(QAbstractNativeEventFilter):
+    """Qt's end of winutil.SnapFilter.
+
+    The logic lives in winutil, which knows nothing about Qt; this is only the
+    adapter that lets QApplication deliver native messages to it. It is a module
+    global because installNativeEventFilter does NOT take ownership -- a filter
+    that goes out of scope leaves Qt calling into freed memory.
+    """
+
+    def __init__(self):
+        super().__init__()
+        self._impl = winutil.SnapFilter()
+
+    def watch(self, hwnd):
+        self._impl.watch(hwnd)
+
+    def nativeEventFilter(self, event_type, message):
+        return self._impl.nativeEventFilter(event_type, message)
+
+
+_SNAP_FILTER = _SnapEventFilter()
+_SNAP_INSTALLED = False
+
+
 class MainWindow(QMainWindow):
     EDGE = 8            # gap around the floating panels, and the resize border
     NO_EDGE = NO_EDGE
@@ -87,10 +112,14 @@ class MainWindow(QMainWindow):
         self._nav_buttons = {}
         self._current_key = "all"
         self._drill_from = None
+        self._snap_ready = False
 
-        # Frameless, with the app's own title bar. Aero Snap, the snap-layout
-        # flyout and edge resizing all still work: the drag and the resize are
-        # handed to the compositor rather than done by hand.
+        # Frameless, with the app's own title bar -- and snappable, which it was
+        # not: FramelessWindowHint makes a WS_POPUP window and Windows will not
+        # snap one at all, by drag, by Win+Left or by the snap-layout flyout.
+        # The styles that make it snappable are put back in showEvent and the
+        # frame they imply is cancelled again in WM_NCCALCSIZE; see
+        # winutil.snap_styles.
         self.setWindowFlag(Qt.FramelessWindowHint, True)
         self.setAttribute(Qt.WA_Hover, True)
 
@@ -1242,6 +1271,19 @@ class MainWindow(QMainWindow):
             ev.accept()
             return
         super().mousePressEvent(ev)
+
+    def showEvent(self, ev):
+        super().showEvent(ev)
+        # Not in __init__: there is no native window until the widget is shown,
+        # and GetWindowLong on a null handle silently does nothing.
+        global _SNAP_INSTALLED
+        if not self._snap_ready:
+            self._snap_ready = winutil.snap_styles(int(self.winId()))
+            if self._snap_ready:
+                _SNAP_FILTER.watch(int(self.winId()))
+                if not _SNAP_INSTALLED:
+                    QApplication.instance().installNativeEventFilter(_SNAP_FILTER)
+                    _SNAP_INSTALLED = True
 
     def changeEvent(self, ev):
         super().changeEvent(ev)
