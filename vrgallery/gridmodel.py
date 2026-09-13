@@ -636,7 +636,18 @@ class PhotoDelegate(QStyledItemDelegate):
                     # whole time, a good share of every frame went on an
                     # animation nobody can follow at that speed.
                     if alpha < 1.0:
+                        # The fast path sets no clip, because the cached tile
+                        # already carries the rounded corners in its own alpha.
+                        # This fill is not that tile: unclipped it puts a square
+                        # plate of surface2 under it, and for the 220 ms of the
+                        # fade each corner shows a nub of #1c2130 on the page's
+                        # #0d0f15. Every thumbnail does it, every time one is
+                        # decoded -- which is the whole grid, on any scroll
+                        # through photos that are not in the cache yet.
+                        p.save()
+                        p.setClipPath(path())
                         p.fillRect(r, QColor(style.PAL["surface2"]))
+                        p.restore()
                         p.setOpacity(alpha)
                     p.drawPixmap(r.topLeft(), self._tile(item, pm, r.width(), r.height()))
                     p.setOpacity(1.0)
@@ -650,7 +661,12 @@ class PhotoDelegate(QStyledItemDelegate):
                     p.drawPixmap(QRectF(dx, dy, dw, dh), pm, QRectF(0, 0, pw, ph))
                     p.setOpacity(1.0)
         if hovered or selected:
-            if blit:                      # the overlays do need the rounded shape
+            # `cheap`, not `blit`: blit is a strict subset of it, and the clip is
+            # missing for the whole of `cheap`. A selected tile still fading got
+            # its veil filled square for exactly the same reason the plate above
+            # did -- select everything, then scroll into rows that have not been
+            # decoded yet, and the corners light up.
+            if cheap:                     # the overlays do need the rounded shape
                 p.setClipPath(path())
             veil = QColor(255, 255, 255, 14 if hovered and not selected else 10)
             p.fillRect(r, veil)

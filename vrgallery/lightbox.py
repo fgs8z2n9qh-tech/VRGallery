@@ -196,6 +196,13 @@ class ImageView(QWidget):
     def paintEvent(self, _ev):
         p = QPainter(self)
         p.setRenderHint(QPainter.SmoothPixmapTransform, True)
+        # Antialiasing too. Everything drawn over the photo here is a curve on a
+        # fractional coordinate -- the face boxes, their name pills, the dashed
+        # live box while tagging, the people badge -- and they come off the image
+        # rect, which is a float fit-scale. Without the hint the engine hard
+        # thresholds the coverage and every one of them steps. It does not touch
+        # the photo: that is SmoothPixmapTransform's job, set above.
+        p.setRenderHint(QPainter.Antialiasing, True)
         p.fillRect(self.rect(), QColor(10, 11, 16))
         if not self._pm:
             if self._message:

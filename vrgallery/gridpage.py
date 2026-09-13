@@ -205,7 +205,14 @@ class TimelineRail(QWidget):
                 year_ys.append((y, year))
             else:
                 p.setPen(QColor(style.PAL["border2"]))
-                p.drawLine(right - 5, int(y), right, int(y))
+                # ON THE HALF PIXEL. A one-pixel pen is centred on the coordinate
+                # it is given, so at a whole y it covers y-0.5 to y+0.5 and the
+                # antialiaser -- on, for the labels -- splits it evenly across two
+                # rows at half strength each. Measured in the shipped render: every
+                # month tick came out #1f232f over #1e232e, and #303748, the colour
+                # it is supposed to be, appeared nowhere in the rail.
+                p.drawLine(QPointF(right - 5, int(y) + 0.5),
+                           QPointF(right, int(y) + 0.5))
             last_year = year
 
         f.setWeight(QFont.DemiBold)
@@ -213,7 +220,8 @@ class TimelineRail(QWidget):
         last_label = -999
         for y, year in year_ys:
             p.setPen(QColor(style.PAL["border"]))
-            p.drawLine(right - 9, int(y), right, int(y))
+            p.drawLine(QPointF(right - 9, int(y) + 0.5),
+                       QPointF(right, int(y) + 0.5))
             if y - last_label > fm.height() + 4:
                 p.setPen(QColor(style.PAL["dim"]))
                 p.drawText(QRectF(0, y - fm.height() / 2, right - 12, fm.height()),
