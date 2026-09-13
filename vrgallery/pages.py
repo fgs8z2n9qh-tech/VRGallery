@@ -118,9 +118,17 @@ class CardDelegate(QStyledItemDelegate):
             pw, ph = pm.width(), pm.height()
             scale = max(cover_r.width() / pw, cover_r.height() / ph)
             dw, dh = pw * scale, ph * scale
+            # Clipped to the BAND, not just to the card. The cover is sized to
+            # fill cover_r, so anything not 16:9 is taller than the band and the
+            # overflow used to run straight down over the title -- which is why
+            # some Worlds cards had their name sitting on the photo and others
+            # had it on the plate below. The clip is what makes them agree.
+            p.save()
+            p.setClipRect(cover_r, Qt.IntersectClip)
             p.drawPixmap(QRectF(cover_r.x() + (cover_r.width() - dw) / 2,
                                 cover_r.y() + (cover_r.height() - dh) / 2, dw, dh),
                          pm, QRectF(0, 0, pw, ph))
+            p.restore()
             g = QLinearGradient(0, cover_r.bottom() - 34, 0, cover_r.bottom())
             g.setColorAt(0, QColor(0, 0, 0, 0))
             g.setColorAt(1, QColor(0, 0, 0, 60))
@@ -772,6 +780,66 @@ class ThumbStripLabel(QWidget):
         super().mouseReleaseEvent(ev)
 
 
+class MoreTile(QWidget):
+    """The "+7" standing in for the thumbnails a strip had no room for.
+
+    A strip that simply laid out more tiles than it had width for did not look
+    like "there are more": Qt cut the overflowing one down the middle and it
+    read as a rendering fault. This takes the last slot instead and says the
+    number out loud, and clicking it goes where the row goes.
+    """
+
+    def __init__(self, count, on_click, parent=None):
+        super().__init__(parent)
+        self._count = count
+        self._on_click = on_click
+        self._hover = False
+        self.setCursor(Qt.PointingHandCursor)
+        self.setAttribute(Qt.WA_Hover, True)
+
+    def set_tile(self, w, h):
+        self.setFixedSize(int(w), int(h))
+
+    def set_count(self, n):
+        if n != self._count:
+            self._count = n
+            self.update()
+
+    def enterEvent(self, ev):
+        self._hover = True
+        self.update()
+        super().enterEvent(ev)
+
+    def leaveEvent(self, ev):
+        self._hover = False
+        self.update()
+        super().leaveEvent(ev)
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        p.setRenderHint(QPainter.Antialiasing, True)
+        r = QRectF(self.rect())
+        path = QPainterPath()
+        path.addRoundedRect(r, 10, 10)
+        p.fillPath(path, QColor(style.PAL["surface2"]))
+        f = QFont()
+        f.setPointSizeF(12.5 if self.height() > 70 else 10.5)
+        f.setWeight(QFont.DemiBold)
+        p.setFont(f)
+        p.setPen(QColor(style.PAL["text"] if self._hover else style.PAL["dim"]))
+        p.drawText(r, Qt.AlignCenter, f"+{self._count}")
+        if self._hover:
+            p.setBrush(Qt.NoBrush)
+            p.setPen(QPen(QColor(255, 255, 255, 150), 2))
+            p.drawRoundedRect(r.adjusted(1, 1, -1, -1), 10, 10)
+        p.end()
+
+    def mouseReleaseEvent(self, ev):
+        if ev.button() == Qt.LeftButton and self._on_click:
+            self._on_click()
+        super().mouseReleaseEvent(ev)
+
+
 class ThumbStrip(QWidget):
     """A row of thumbnails that sizes its tiles to what there is to show.
 
@@ -779,6 +847,12 @@ class ThumbStrip(QWidget):
     the card is as wide as the window whatever it holds. The tiles now grow to
     fill the row, up to a height that keeps a single photo from becoming a
     billboard.
+
+    And it never lays out more than it has room for. It used to: the per-tile
+    width was clamped up to MIN_W without the COUNT coming down, so the row was
+    placed wider than the widget and Qt cut the last tile in half. Memories asks
+    for nine and eight fit, so there was always exactly one sliced thumbnail on
+    the page.
     """
 
     GAP = 8
@@ -790,9 +864,13 @@ class ThumbStrip(QWidget):
         self._tiles = []
         self._max_h = max_h        # a dense list stays compact; a highlight row
         self._h = 88               # can afford to be tall
+        self._more = None          # the "+N" in the last slot, built on demand
+        self._on_more = None       # where it goes: wherever the row goes
 
     def add(self, main, cache, item, on_click):
         self._tiles.append(ThumbStripLabel(main, cache, item, on_click, parent=self))
+        if self._on_more is None:
+            self._on_more = on_click
         self._relayout()
 
     def clear(self):
@@ -800,6 +878,11 @@ class ThumbStrip(QWidget):
             t.setParent(None)
             t.deleteLater()
         self._tiles = []
+        if self._more is not None:
+            self._more.setParent(None)
+            self._more.deleteLater()
+            self._more = None
+        self._on_more = None
 
     def count(self):
         return len(self._tiles)
@@ -809,19 +892,40 @@ class ThumbStrip(QWidget):
         if not n:
             self._h = 0
             self.setFixedHeight(0)
+            if self._more is not None:
+                self._more.hide()
             return
         avail = max(self.MIN_W, self.width() or self.MIN_W * n)
-        fill = (avail - self.GAP * (n - 1)) / n
+        # How many slots there are at the smallest a tile is allowed to be. Work
+        # this out FIRST: clamping the width without clamping the count is what
+        # made the row overflow its own widget.
+        slots = max(1, int((avail + self.GAP) // (self.MIN_W + self.GAP)))
+        show = n if n <= slots else max(1, slots - 1)   # the last slot says "+N"
+        hidden = n - show
+        cells = show + (1 if hidden else 0)
+        fill = (avail - self.GAP * (cells - 1)) / cells
         # enough photos and the row fills exactly; a lone one grows only to the
         # row height, instead of becoming a billboard
         w = max(self.MIN_W, min(fill, self._max_h * self.RATIO))
         h = round(w / self.RATIO)
         x = 0
-        for t in self._tiles:
+        for i, t in enumerate(self._tiles):
+            if i >= show:
+                t.hide()
+                continue
             t.set_tile(round(w), h)
             t.move(round(x), 0)
             t.show()
             x += w + self.GAP
+        if hidden:
+            if self._more is None:
+                self._more = MoreTile(hidden, self._on_more, self)
+            self._more.set_count(hidden)
+            self._more.set_tile(round(w), h)
+            self._more.move(round(x), 0)
+            self._more.show()
+        elif self._more is not None:
+            self._more.hide()
         self._h = h
         self.setFixedHeight(h)
 
