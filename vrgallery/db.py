@@ -61,7 +61,10 @@ CREATE TABLE IF NOT EXISTS photo_tags(
   y REAL NOT NULL,
   w REAL DEFAULT 0,
   h REAL DEFAULT 0,
-  created_at TEXT
+  created_at TEXT,
+  -- the colour fingerprint of the box, so the next one like it can be named
+  -- without asking. See facesig. Zero length means "tried and could not".
+  sig BLOB
 );
 CREATE INDEX IF NOT EXISTS idx_tags_photo ON photo_tags(photo_id);
 CREATE INDEX IF NOT EXISTS idx_tags_name ON photo_tags(name);
@@ -167,10 +170,11 @@ class Database:
                 self._conn.execute(f"ALTER TABLE photos ADD COLUMN {col} {decl}")
         have_t = {r["name"] for r in self._conn.execute("PRAGMA table_info(photo_tags)")}
         if have_t:                       # tags started life as a bare point
-            for col in ("w", "h"):
+            for col, decl in (("w", "REAL DEFAULT 0"), ("h", "REAL DEFAULT 0"),
+                              ("sig", "BLOB")):
                 if col not in have_t:
                     self._conn.execute(
-                        f"ALTER TABLE photo_tags ADD COLUMN {col} REAL DEFAULT 0")
+                        f"ALTER TABLE photo_tags ADD COLUMN {col} {decl}")
         have_s = {r["name"] for r in self._conn.execute("PRAGMA table_info(sessions)")}
         for col, decl in (("instance_type", "TEXT"), ("region", "TEXT")):
             if col not in have_s:
@@ -620,15 +624,63 @@ class Database:
                 (r["name"], r["x"], r["y"], r["w"] or 0.0, r["h"] or 0.0))
         return out
 
-    def set_photo_tag(self, photo_id, name, x, y, w=0.0, h=0.0, when=""):
-        """Placing the same name twice moves and resizes the existing box."""
+    def set_photo_tag(self, photo_id, name, x, y, w=0.0, h=0.0, when="", sig=None):
+        """Placing the same name twice moves and resizes the existing box.
+
+        The signature is overwritten along with the box, NULL included: a box
+        that has moved no longer looks like what its old signature recorded, and
+        a NULL is simply a note to work it out again later.
+        """
         vals = (float(x), float(y), float(w), float(h))
         with self._lock:
             self._conn.execute(
-                "INSERT INTO photo_tags(photo_id, name, x, y, w, h, created_at) "
-                "VALUES(?,?,?,?,?,?,?) "
-                "ON CONFLICT(photo_id, name) DO UPDATE SET x=?, y=?, w=?, h=?",
-                (photo_id, name) + vals + (when,) + vals)
+                "INSERT INTO photo_tags(photo_id, name, x, y, w, h, created_at, sig) "
+                "VALUES(?,?,?,?,?,?,?,?) "
+                "ON CONFLICT(photo_id, name) DO UPDATE SET x=?, y=?, w=?, h=?, sig=?",
+                (photo_id, name) + vals + (when, sig) + vals + (sig,))
+            self._conn.commit()
+
+    def tag_sigs_for(self, names):
+        """{name: [signature, ...]} for the people worth considering.
+
+        The caller narrows `names` to whoever the logs put in that instance --
+        that restriction is most of why the guess is any good.
+        """
+        names = [n for n in dict.fromkeys(names) if n]
+        if not names:
+            return {}
+        out = {}
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT name, sig FROM photo_tags WHERE sig IS NOT NULL "
+                "AND length(sig) > 0 AND name IN (%s)" % ",".join("?" * len(names)),
+                names).fetchall()
+        for r in rows:
+            out.setdefault(r["name"], []).append(bytes(r["sig"]))
+        return out
+
+    def tags_needing_sig(self, limit=500):
+        """Tags placed before signatures existed, or whose box has since moved."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT t.photo_id, t.name, t.x, t.y, t.w, t.h, p.path "
+                "FROM photo_tags t JOIN photos p ON p.id = t.photo_id "
+                "WHERE t.sig IS NULL AND p.missing = 0 LIMIT ?", (limit,)).fetchall()
+        return [(r["photo_id"], r["name"], r["x"], r["y"],
+                 r["w"] or 0.0, r["h"] or 0.0, r["path"]) for r in rows]
+
+    def set_tag_sigs(self, rows):
+        """[(sig, photo_id, name), ...] in one transaction.
+
+        A box that could not produce one is stored as a zero-length blob rather
+        than left NULL, so the next index pass does not decode its photo again
+        to fail in the same way.
+        """
+        if not rows:
+            return
+        with self._lock:
+            self._conn.executemany(
+                "UPDATE photo_tags SET sig=? WHERE photo_id=? AND name=?", rows)
             self._conn.commit()
 
     def remove_photo_tag(self, photo_id, name):

@@ -6,7 +6,7 @@ from PySide6.QtCore import QObject, QPointF, QRectF, QRunnable, Qt, QThreadPool,
 from PySide6.QtGui import QColor, QImage, QImageReader, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from . import fmt, icons, style, vrclog, widgets, winutil
+from . import facesig, fmt, icons, style, vrclog, widgets, winutil
 
 
 class _LoaderSignals(QObject):
@@ -910,7 +910,8 @@ class Lightbox(QWidget):
         if self._retag_name and it.id == self._retag_for:
             name, self._retag_name = self._retag_name, ""   # name already known
             self._retag_for = None
-            self.main.act_tag(it.id, name, fx, fy, fw, fh)
+            self.main.act_tag(it.id, name, fx, fy, fw, fh,
+                              sig=self._box_signature(it, fx, fy, fw, fh))
             self._load_tags()
             self._fill_panel(it)
             self.btn_tag.setChecked(False)
@@ -928,13 +929,15 @@ class Lightbox(QWidget):
         recent = [n for n in self.main.db.tag_names(24)
                   if n not in taken and n not in known]
 
-        menu = QMenu(self)
-        for name in known:
-            menu.addAction(name).setData(name)
-        if known and recent:
-            menu.addSeparator()
-        for name in recent[:8]:
-            menu.addAction(name).setData(name)
+        # Who the app thinks is in the box. Only ever a pre-selection: measured
+        # on this library it speaks for seven boxes in ten and is right for
+        # nineteen in twenty of those, and when it is wrong the menu is still
+        # the menu. Restricted to the people the logs put in the instance
+        # whenever there are any -- that restriction is most of why it works.
+        sig = self._box_signature(it, fx, fy, fw, fh)
+        guess = self._guess_name(sig, known or recent)
+
+        menu = self._who_menu(known, recent, guess)
         if menu.actions():
             menu.addSeparator()
         other = menu.addAction(icons.qicon("plus", style.PAL["dim"], 16),
@@ -949,9 +952,65 @@ class Lightbox(QWidget):
                 return
         else:
             name = chosen.data()
-        self.main.act_tag(it.id, name, fx, fy, fw, fh)
+        self.main.act_tag(it.id, name, fx, fy, fw, fh, sig=sig)
         self._load_tags()
         self._fill_panel(it)
+
+    def _who_menu(self, known, recent, guess):
+        """The who-is-this menu: people the logs put here, then people tagged
+        lately, with the guess moved to the top and shown in bold.
+
+        Its own method so it can be looked at without being opened -- QMenu.exec
+        blocks on a real popup, and a test that fakes that away is testing the
+        fake. It also puts the ordering in one place instead of leaving half of
+        it at the call site.
+        """
+        from PySide6.QtWidgets import QMenu
+
+        def lift(names):
+            return ([guess] + [n for n in names if n != guess]
+                    if guess in names else list(names))
+
+        known, recent = lift(known), lift(recent)[:8]
+        menu = QMenu(self)
+        suggested = None
+        for i, group in enumerate((known, recent)):
+            if i and known and recent:
+                menu.addSeparator()
+            for name in group:
+                act = menu.addAction(name)
+                act.setData(name)
+                if name == guess:
+                    suggested = act
+        if suggested is not None:
+            menu.setDefaultAction(suggested)     # bold, and the one Enter takes
+            menu.setActiveAction(suggested)
+        return menu
+
+    def _box_signature(self, it, fx, fy, fw, fh):
+        """The colour fingerprint of the box just drawn, or None.
+
+        Off the pixmap already on screen when there is one: decoding the
+        original again costs about 90 ms, and this runs between the mouse
+        coming up and the menu appearing.
+        """
+        try:
+            pm = self._cache.get(it.path)
+            if pm is not None and not pm.isNull():
+                return facesig.signature(pm.toImage(), fx, fy, fw, fh)
+            return facesig.signature_for_path(it.path, fx, fy, fw, fh)
+        except Exception:
+            return None           # a suggestion is never worth an exception
+
+    def _guess_name(self, sig, pool):
+        """Who that signature looks like, or None when it is not sure enough."""
+        if not sig or not pool:
+            return None
+        try:
+            name, sure = facesig.suggest(sig, self.main.db.tag_sigs_for(pool))
+            return name if sure else None
+        except Exception:
+            return None
 
     def _remove_tag(self, name):
         it = self.current()

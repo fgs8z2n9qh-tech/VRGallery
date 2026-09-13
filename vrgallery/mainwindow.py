@@ -78,6 +78,10 @@ class _SnapEventFilter(QAbstractNativeEventFilter):
     def watch(self, hwnd):
         self._impl.watch(hwnd)
 
+    def forget(self, hwnd):
+        self._impl.unwatch(hwnd)
+        self.on_show = None
+
     def nativeEventFilter(self, event_type, message):
         # A second copy of the app asking this one to come to the front. It is
         # handled here rather than by the launcher doing it from outside,
@@ -678,9 +682,9 @@ class MainWindow(QMainWindow):
         if self.page_grid.filter.min_rating and stars < self.page_grid.filter.min_rating:
             self.page_grid.refresh()
 
-    def act_tag(self, photo_id, name, x, y, w=0.0, h=0.0):
+    def act_tag(self, photo_id, name, x, y, w=0.0, h=0.0, sig=None):
         self.db.set_photo_tag(photo_id, name, x, y, w, h,
-                              datetime.now().isoformat(timespec="seconds"))
+                              datetime.now().isoformat(timespec="seconds"), sig=sig)
         self.toast(f"Tagged {name}.", "ok")
 
     def act_copy(self, item):
@@ -1342,6 +1346,15 @@ class MainWindow(QMainWindow):
                                  "session history. Right-click the icon to quit.")
             ev.ignore()
             return
+        # The native filter is installed on the whole application and outlives
+        # every window, so it must be told this one is going: it holds the
+        # window's own hwnd, and a bound method of it. Windows reissues hwnds,
+        # and a stale one has this filter cancelling the frame of somebody
+        # else's window -- which in a test run is the next widget to be grabbed.
+        try:
+            _SNAP_FILTER.forget(int(self.winId()))
+        except (RuntimeError, ValueError):
+            pass
         self.api.stop()
         self.tray.hide()
         self.slideshow.stop()

@@ -249,6 +249,15 @@ class SnapFilter:
     def watch(self, hwnd):
         self._hwnds.add(int(hwnd))
 
+    def unwatch(self, hwnd):
+        """Forget a window that has closed.
+
+        Windows hands out HWND values again once they are free, so a set that
+        only ever grows will one day claim somebody else's window and cancel a
+        non-client frame that was never ours to cancel.
+        """
+        self._hwnds.discard(int(hwnd))
+
     def nativeEventFilter(self, event_type, message):
         try:
             if bytes(event_type) != b"windows_generic_MSG":

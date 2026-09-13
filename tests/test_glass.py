@@ -25,24 +25,32 @@ def app():
     return QApplication.instance() or QApplication([])
 
 
+class Busy(QWidget):
+    """A colourful thing for the glass to sample.
+
+    Defined here and not inside the fixture: a class statement in a function
+    body builds a NEW QWidget subclass on every call, and PySide registers a new
+    type for each one. Thirteen fixtures became thirteen types, and the churn
+    was enough to turn somebody else's test into an access violation.
+    """
+
+    def paintEvent(self, _ev):
+        p = QPainter(self)
+        g = QLinearGradient(0, 0, self.width(), self.height())
+        g.setColorAt(0.0, QColor(210, 40, 90))
+        g.setColorAt(0.5, QColor(20, 130, 210))
+        g.setColorAt(1.0, QColor(12, 16, 24))
+        p.fillRect(self.rect(), g)
+        for x in range(0, self.width(), 41):
+            p.fillRect(x, 0, 14, self.height(), QColor(255, 235, 130))
+        p.end()
+
+
 @pytest.fixture()
 def panel(app):
     """A glass bar floating over a busy, colourful source widget."""
     host = QWidget()
     host.resize(600, 400)
-
-    class Busy(QWidget):
-        def paintEvent(self, _ev):
-            p = QPainter(self)
-            g = QLinearGradient(0, 0, self.width(), self.height())
-            g.setColorAt(0.0, QColor(210, 40, 90))
-            g.setColorAt(0.5, QColor(20, 130, 210))
-            g.setColorAt(1.0, QColor(12, 16, 24))
-            p.fillRect(self.rect(), g)
-            for x in range(0, self.width(), 41):
-                p.fillRect(x, 0, 14, self.height(), QColor(255, 235, 130))
-            p.end()
-
     source = Busy(host)
     source.setGeometry(0, 0, 600, 400)
     bar = widgets.GlassBar(host, radius=16)
@@ -52,12 +60,13 @@ def panel(app):
     app.processEvents()
     yield host, source, bar
     host.hide()
+    host.deleteLater()
+    app.processEvents()
     # Deleted here, deliberately, rather than left to the garbage collector.
     # A QWidget dropped without this is destroyed on the C++ side at whatever
     # arbitrary later moment Python happens to collect it -- inside another
     # test, often part-way through showing a window -- and the suite acquires
     # an access violation that wanders about when you add a file.
-    host.deleteLater()
     app.processEvents()
 
 

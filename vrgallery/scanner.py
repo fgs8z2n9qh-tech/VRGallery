@@ -7,7 +7,7 @@ from datetime import datetime
 from PySide6.QtCore import QObject, QRunnable, QThread, QThreadPool, QTimer, Signal, QFileSystemWatcher
 from PySide6.QtGui import QImage
 
-from . import fmt, imaging, vrclog
+from . import facesig, fmt, imaging, vrclog
 
 
 def _iso(dt):
@@ -164,6 +164,28 @@ class IndexWorker(QThread):
                 if meta:
                     self.db.set_meta_photo(pid, meta)
             self.db.set_meta("photo_meta_version", imaging.META_VERSION)
+
+        # Fingerprints for face tags placed before this existed, and for any box
+        # that has since been moved. About 90 ms each, once, on this thread --
+        # nearly all of it decoding the photo. What it buys is that the next box
+        # you draw on somebody already tagged comes with their name picked out.
+        todo = self.db.tags_needing_sig()
+        if todo:
+            b.index_progress.emit("Learning the faces you tagged…", 0, len(todo))
+            done, last, img = [], None, None
+            for i, (pid, name, x, y, w, h, path) in enumerate(todo):
+                if self.isInterruptionRequested():
+                    return
+                if path != last:
+                    img = QImage(path)
+                    last = path
+                # A box that cannot produce one is stored empty rather than left
+                # NULL, or every later pass decodes that photo again to fail.
+                done.append((facesig.signature(img, x, y, w, h) or b"", pid, name))
+                if i % 40 == 0:
+                    b.index_progress.emit("Learning the faces you tagged…",
+                                          i, len(todo))
+            self.db.set_tag_sigs(done)
 
         total, size, favs = self.db.counts()
         b.index_done.emit({"new": new_count, "auth": sorted(auth),
