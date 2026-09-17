@@ -1233,7 +1233,33 @@ class MainWindow(QMainWindow):
     def start_slideshow(self, items, pos):
         self.slideshow.start(items, pos)
 
-    # ---------------- accent ----------------
+    # ---------------- appearance ----------------
+    def set_palette(self, key):
+        """Swap the whole ground. Everything that cached a colour has to go.
+
+        apply_palette mutates style.PAL in place, so anything that READS it gets
+        the new value for free. What does not is anything that BAKED one into a
+        pixmap: the rendered day headers, the rounded tile cache, the timeline
+        rail's scale, and the glass panels, which hold a whole composited
+        surface. Miss one and the app comes back in two colour schemes at once.
+        """
+        key = style.apply_palette(key)
+        self.cfg.set("palette", key)
+        self.app.setStyleSheet(style.build_qss(self.cfg.get("accent")))
+        for page in self.stack.findChildren(QWidget):
+            for attr in ("_glass_cache", "_glass_surface", "_shadow"):
+                if hasattr(page, attr):
+                    setattr(page, attr, None)
+        d = self.page_grid.delegate
+        d._heads.clear()
+        d._tiles.clear()
+        d._size_key = None
+        self.page_grid.rail._scale = None
+        self.page_grid.sticky.update()
+        for w in self.findChildren(QWidget):
+            w.update()
+        self.toast(f"Theme: {style.PALETTES[key]['label']}", "ok")
+
     def set_accent(self, key):
         self.cfg.set("accent", key)
         self.app.setStyleSheet(style.build_qss(key))

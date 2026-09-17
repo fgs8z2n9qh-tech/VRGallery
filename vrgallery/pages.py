@@ -1830,6 +1830,21 @@ class SettingsPage(QWidget):
             row.addWidget(dot)
         row.addStretch(1)
         card_look.vbox.addLayout(row)
+
+        trow = QHBoxLayout()
+        trow.setSpacing(10)
+        trow.addWidget(QLabel("Theme:"))
+        self._themes = []
+        for key, pal in style.PALETTES.items():
+            a, b = pal["swatch"]
+            dot = widgets.GradientDot(
+                a, b, selected=(key == self.main.cfg.get("palette")),
+                on_click=lambda k=key: self._set_palette(k))
+            dot.setToolTip(pal["label"])
+            self._themes.append((key, dot))
+            trow.addWidget(dot)
+        trow.addStretch(1)
+        card_look.vbox.addLayout(trow)
         v.addWidget(card_look)
 
         # sharing
@@ -2169,6 +2184,12 @@ class SettingsPage(QWidget):
         self.ed_hook.setEchoMode(
             QLineEdit.Normal if self.ed_hook.echoMode() == QLineEdit.Password
             else QLineEdit.Password)
+
+    def _set_palette(self, key):
+        self.main.set_palette(key)
+        for k, dot in self._themes:
+            dot.selected = (k == key)
+            dot.update()
 
     def _set_accent(self, key):
         self.main.set_accent(key)

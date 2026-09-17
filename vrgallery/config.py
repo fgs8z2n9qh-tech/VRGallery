@@ -13,6 +13,7 @@ DEFAULTS = {
     "slideshow_secs": 5,
     "jpeg_quality": 92,
     "accent": "vrblue",
+    "palette": "midnight",       # the whole ground; see style.PALETTES
     "thumb_px": 176,
     "sort_desc": True,
     "window": None,           # [x, y, w, h, maximized]

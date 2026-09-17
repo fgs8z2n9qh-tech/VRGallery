@@ -80,6 +80,7 @@ def main(argv=None):
         app.setWindowIcon(QIcon(icons.logo_pixmap(256, 1.0)))
 
     cfg = Config()
+    style.apply_palette(cfg.get("palette"))
     app.setStyleSheet(style.build_qss(cfg.get("accent")))
     db = Database()
     # A library with photos in it predates the welcome card, so don't ask again.

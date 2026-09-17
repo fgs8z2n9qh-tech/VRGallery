@@ -17,6 +17,43 @@ PAL = {
     "ok":       "#3be0a0",
 }
 
+# The whole ground, swappable. PAL below is whichever of these is in force; it
+# is updated IN PLACE by apply_palette, so every style.PAL[...] read anywhere in
+# the app follows without a single call site changing.
+PALETTES = {
+    "midnight": {
+        "label": "Midnight", "swatch": ("#0d0f15", "#3d8bff"),
+        "bg": "#0d0f15", "sidebar": "#101320", "surface": "#161a26",
+        "surface2": "#1c2130", "hover": "#232939", "border": "#262c3d",
+        "border2": "#303748", "text": "#e9ecf5", "dim": "#98a2b8",
+        "faint": "#657089",
+    },
+    "ember": {
+        "label": "Ember", "swatch": ("#141010", "#ffb04a"),
+        "bg": "#141010", "sidebar": "#1b1513", "surface": "#241c18",
+        "surface2": "#2d2420", "hover": "#3a2f28", "border": "#3d312a",
+        "border2": "#4d4037", "text": "#f2ece4", "dim": "#b3a596",
+        "faint": "#7d7164",
+    },
+}
+DEFAULT_PALETTE = "midnight"
+
+
+def apply_palette(key):
+    """Put one palette in force. -> the key actually applied.
+
+    PAL is mutated rather than rebound on purpose: the app reads style.PAL[...]
+    in a hundred places and half of them hold no reference to this module's
+    globals beyond that one lookup. Anything that CACHES a colour -- rendered
+    day headers, tile pixmaps, the rail's scale, the glass -- has to be dropped
+    by the caller; see MainWindow.set_palette.
+    """
+    key = key if key in PALETTES else DEFAULT_PALETTE
+    PAL.update({k: v for k, v in PALETTES[key].items()
+                if k not in ("label", "swatch")})
+    return key
+
+
 ACCENTS = {
     "vrblue": {"a": "#3d8bff", "b": "#5ad4ff", "label": "VR Blue"},
     "green":  {"a": "#34d97a", "b": "#8ae05e", "label": "Green"},
