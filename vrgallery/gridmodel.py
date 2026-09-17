@@ -18,6 +18,7 @@ KIND_PHOTO = 1
 KIND_PERIOD = 2       # a year or month card at the zoomed-out browsing levels
 KIND_SPACER = 3       # blank full-width row: the content scrolls under a floating
                       # header, so it needs somewhere to start
+KIND_BURST = 4        # a run of shots taken seconds apart, shown as one stack
 
 
 class PhotoItem:
@@ -131,38 +132,110 @@ class ThumbCache(QObject):
 
 
 class GridModel(QAbstractListModel):
+    # A burst is a run of shots taken seconds apart: you line a pose up and press
+    # the button eight times. Measured on the author's own library -- 108 runs of
+    # three or more within 30 seconds, holding 400 photographs, 22% of the whole
+    # thing. Collapsed, the visible tiles fall from 1812 to 1520.
+    BURST_GAP = 30.0
+    BURST_MIN = 3
+    # And an upper bound. Without one a long shoot with no pause in it folds into
+    # a single tile -- the whole of the All sheet became one, in a test, because
+    # that level has no day boundaries to stop a run. Twelve is a stack you can
+    # still read the count on; past that it wants to be several.
+    BURST_MAX = 12
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self._rows = []            # (kind, payload); header payload=(day, count)
-        self._by_id = {}           # pid -> model row
-        self._photos = []          # PhotoItem list in display order
+        self._by_id = {}           # pid -> model row; EVERY photo in a burst
+                                   # points at the burst's row, so revealing one
+                                   # still finds where it is on screen
+        self._photos = []          # PhotoItem list in display order, never folded
+        self._expanded = set()     # id of the first photo of each opened burst
+        self.collapse = True
+        self._shape = (True, 0)    # (group_by_day, top_gap) of the last build
 
     def set_photos(self, db_rows, group_by_day=True, top_gap=0):
+        self._photos = [PhotoItem(r) for r in db_rows]
+        self._expanded.clear()     # a new list is a new set of runs
+        self._shape = (group_by_day, top_gap)
+        self._rebuild()
+
+    def set_collapse_bursts(self, on):
+        on = bool(on)
+        if on != self.collapse:
+            self.collapse = on
+            self._expanded.clear()
+            self._rebuild()
+
+    def toggle_burst(self, pid):
+        """Open or close the run whose first photo this is. -> True if it moved."""
+        for kind, payload in self._rows:
+            if kind == KIND_BURST and payload[0].id == pid:
+                self._expanded.add(pid)
+                self._rebuild()
+                return True
+        if pid in self._expanded:
+            self._expanded.discard(pid)
+            self._rebuild()
+            return True
+        return False
+
+    @staticmethod
+    def _secs(iso):
+        dt = fmt.parse_iso(iso) if iso else None
+        return dt.timestamp() if dt else None
+
+    def _run_end(self, secs, i, group_by_day):
+        """Where the run starting at i ends. Photos, not rows."""
+        n = len(self._photos)
+        j = i + 1
+        while j < n and j - i < self.BURST_MAX:
+            if group_by_day and self._photos[j].day != self._photos[i].day:
+                break
+            a, b = secs[j - 1], secs[j]
+            # An unreadable timestamp ends the run rather than joining anything:
+            # a burst is a claim about time, and we have none for that photo.
+            if a is None or b is None or abs(b - a) > self.BURST_GAP:
+                break
+            j += 1
+        return j
+
+    def _rebuild(self):
+        group_by_day, top_gap = self._shape
         self.beginResetModel()
         self._rows = []
         self._by_id = {}
-        self._photos = []
         if top_gap:
             self._rows.append((KIND_SPACER, top_gap))
+        counts = {}
         if group_by_day:
-            counts = {}
-            for r in db_rows:
-                counts[r["day"]] = counts.get(r["day"], 0) + 1
-            last_day = object()
-            for r in db_rows:
-                if r["day"] != last_day:
-                    last_day = r["day"]
-                    self._rows.append((KIND_HEADER, (r["day"], counts.get(r["day"], 0))))
-                item = PhotoItem(r)
-                self._by_id[item.id] = len(self._rows)
-                self._photos.append(item)
-                self._rows.append((KIND_PHOTO, item))
-        else:
-            for r in db_rows:
-                item = PhotoItem(r)
-                self._by_id[item.id] = len(self._rows)
-                self._photos.append(item)
-                self._rows.append((KIND_PHOTO, item))
+            for it in self._photos:
+                counts[it.day] = counts.get(it.day, 0) + 1
+        secs = [self._secs(it.taken_at) for it in self._photos]
+        last_day = object()
+        i, n = 0, len(self._photos)
+        while i < n:
+            it = self._photos[i]
+            if group_by_day and it.day != last_day:
+                last_day = it.day
+                self._rows.append((KIND_HEADER, (it.day, counts.get(it.day, 0))))
+            # Only where there are days to bound a run. The All sheet is
+            # deliberately one uninterrupted wall of the whole library, and a
+            # burst is a claim about one sitting within one day.
+            j = (self._run_end(secs, i, group_by_day)
+                 if self.collapse and group_by_day else i + 1)
+            run = self._photos[i:j]
+            if len(run) >= self.BURST_MIN and run[0].id not in self._expanded:
+                row = len(self._rows)
+                for m in run:
+                    self._by_id[m.id] = row
+                self._rows.append((KIND_BURST, run))
+            else:
+                for m in run:
+                    self._by_id[m.id] = len(self._rows)
+                    self._rows.append((KIND_PHOTO, m))
+            i = j
         self.endResetModel()
 
     def set_periods(self, rows, level, covers, top_gap=0):
@@ -240,7 +313,8 @@ class GridModel(QAbstractListModel):
         kind, payload = self._rows[row]
         if kind in (KIND_PERIOD, KIND_SPACER):
             return None
-        day = payload[0] if kind == KIND_HEADER else payload.day
+        day = (payload[0] if kind == KIND_HEADER else
+               payload[0].day if kind == KIND_BURST else payload.day)
         if not day:
             return None
         head = row
@@ -261,7 +335,8 @@ class GridModel(QAbstractListModel):
         for row, (kind, payload) in enumerate(self._rows):
             if kind == KIND_SPACER:      # a blank row has no date of its own
                 continue
-            day = payload[0] if kind == KIND_HEADER else payload.day
+            day = (payload[0] if kind == KIND_HEADER else
+                   payload[0].day if kind == KIND_BURST else payload.day)
             ym = (day or "")[:7]
             if ym and ym != last:
                 marks.append((row, ym))
@@ -269,11 +344,24 @@ class GridModel(QAbstractListModel):
         return marks
 
     def photo_pos(self, model_row):
-        """Model row -> position within the photo-only list."""
+        """Model row -> position within the photo-only list.
+
+        photos() is never folded, so a collapsed burst opens the lightbox at the
+        first shot of the run and the arrow keys walk the rest of it. Opening on
+        the tile's own frame -- the LAST one -- would put you at the end of the
+        run with nowhere to go but backwards.
+        """
         kind, payload = self._rows[model_row]
+        if kind == KIND_BURST:
+            return self._photos.index(payload[0])
         if kind != KIND_PHOTO:
             return -1
         return self._photos.index(payload)
+
+    def burst_at(self, model_row):
+        """The run at this row, or None."""
+        kind, payload = self._rows[model_row]
+        return payload if kind == KIND_BURST else None
 
     def row_of_id(self, pid):
         return self._by_id.get(pid, -1)
@@ -440,7 +528,7 @@ class PhotoDelegate(QStyledItemDelegate):
         kind, payload = (model.row_at(index.row()) if hasattr(model, "row_at")
                          else (index.data(KindRole), index.data(ItemRole)))
         cell, period, head, full_w = self._sizes()
-        if kind == KIND_PHOTO:
+        if kind in (KIND_PHOTO, KIND_BURST):
             return cell
         if kind == KIND_SPACER:
             return QSize(full_w, max(1, int(payload or 1)))
@@ -465,6 +553,8 @@ class PhotoDelegate(QStyledItemDelegate):
             self._paint_header(painter, option, payload)
         elif kind == KIND_PERIOD:
             self._paint_period(painter, option, payload)
+        elif kind == KIND_BURST:
+            self._paint_burst(painter, option, payload)
         else:
             self._paint_photo(painter, option, payload)
         painter.restore()
@@ -742,6 +832,34 @@ class PhotoDelegate(QStyledItemDelegate):
             p.setBrush(Qt.NoBrush)
             p.drawRoundedRect(rf.adjusted(1.2, 1.2, -1.2, -1.2), self.radius - 1, self.radius - 1)
 
+    def _burst_badge_rect(self, r):
+        """Where the count sits on a collapsed burst. Also its hit target."""
+        return QRect(r.right() - 44, r.bottom() - 26, 36, 18)
+
+    def _paint_burst(self, p, option, run):
+        """A run of shots as one tile: the last frame, and how many there are.
+
+        The LAST, not the first: you press the button until you get the one you
+        wanted, so the keeper is at the end of the run far more often than at
+        the start.
+
+        No stack of offset cards behind it -- at three pixels between tiles they
+        would sit on the neighbours. The fold in the corner and the count do the
+        same work inside the tile's own bounds.
+        """
+        self._paint_photo(p, option, run[-1])
+        r = option.rect
+        badge = self._burst_badge_rect(r)
+        p.save()
+        p.setRenderHint(QPainter.Antialiasing, True)
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(0, 0, 0, 150))
+        p.drawRoundedRect(QRectF(badge), 9, 9)
+        p.setPen(QColor(255, 255, 255, 230))
+        p.setFont(self._f_small)
+        p.drawText(QRectF(badge), Qt.AlignCenter, f"❐ {len(run)}")
+        p.restore()
+
     def _star_rect(self, r):
         return QRect(r.right() - 26, r.top() + 11, 15, 15)
 
@@ -759,6 +877,7 @@ class PhotoDelegate(QStyledItemDelegate):
 
 class GridView(QListView):
     open_requested = Signal(QModelIndex)
+    burst_toggled = Signal(int)      # model row of the stack whose badge was hit
     fav_key = Signal()
     delete_key = Signal()
     context_requested = Signal(object, QModelIndex)   # QPoint, index
@@ -795,7 +914,7 @@ class GridView(QListView):
         self.clicked.connect(self._maybe_drill)
 
     def _maybe_open(self, ix):
-        if ix.data(KindRole) == KIND_PHOTO:
+        if ix.data(KindRole) in (KIND_PHOTO, KIND_BURST):
             self.open_requested.emit(ix)
 
     def _maybe_drill(self, ix):
@@ -1007,11 +1126,29 @@ class GridView(QListView):
         ix = self.indexAt(ev.position().toPoint())
         may_drag = (ev.button() == Qt.LeftButton
                     and ix.isValid()
-                    and ix.data(KindRole) == KIND_PHOTO
-                    and not self._on_star(ix, ev.position().toPoint()))
+                    and ix.data(KindRole) in (KIND_PHOTO, KIND_BURST)
+                    and not self._on_star(ix, ev.position().toPoint())
+                    and not self._on_burst_badge(ix, ev.position().toPoint()))
         self._press_draggable = may_drag
         self.setDragEnabled(may_drag)
+        if (ev.button() == Qt.LeftButton and ix.isValid()
+                and self._on_burst_badge(ix, ev.position().toPoint())):
+            # The badge opens the stack where it stands. Handled on the press and
+            # not passed on, so it neither changes the selection nor arms a drag.
+            self.burst_toggled.emit(ix.row())
+            ev.accept()
+            return
         super().mousePressEvent(ev)
+
+    def _on_burst_badge(self, index, pos):
+        """Is the pointer on the count badge of a collapsed burst?"""
+        if index.data(KindRole) != KIND_BURST:
+            return False
+        delegate = self.itemDelegate()
+        rect = getattr(delegate, "_burst_badge_rect", None)
+        if rect is None:
+            return False
+        return rect(self.visualRect(index)).adjusted(-6, -6, 6, 6).contains(pos)
 
     def _on_star(self, index, pos):
         delegate = self.itemDelegate()
@@ -1049,9 +1186,24 @@ class GridView(QListView):
         drag.exec(Qt.CopyAction, Qt.CopyAction)
 
     def selected_photo_items(self):
+        """Every photograph the selection stands for.
+
+        A collapsed burst is ONE row carrying a list of photographs, and this is
+        the function every destructive path goes through -- delete, the drag to
+        Explorer or Discord, favouriting, the selection bar's count. Return the
+        representative alone and selecting a stack of eight and dragging it out
+        would quietly send one file. So a burst row is expanded here, where all
+        of them meet, rather than at each of the call sites.
+        """
         out = []
+        model = self.model()
+        at = getattr(model, "row_at", None)
         for ix in self.selectionModel().selectedIndexes():
-            if ix.data(KindRole) == KIND_PHOTO:
-                out.append(ix.data(ItemRole))
+            kind, payload = (at(ix.row()) if at is not None
+                             else (ix.data(KindRole), ix.data(ItemRole)))
+            if kind == KIND_PHOTO:
+                out.append(payload)
+            elif kind == KIND_BURST:
+                out.extend(payload)
         out.sort(key=lambda it: it.taken_at or "")
         return out

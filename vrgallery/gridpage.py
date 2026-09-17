@@ -494,6 +494,7 @@ class GridPage(QWidget):
         self.view.context_requested.connect(self._context_menu)
         self.view.selectionModel().selectionChanged.connect(self._sel_changed)
         self.view.zoom_requested.connect(self._zoom_by)
+        self.view.burst_toggled.connect(self._toggle_burst)
 
         # --- empty state + selection bar (floating) ---
         self.empty = widgets.EmptyState("image", "Nothing here",
@@ -856,6 +857,23 @@ class GridPage(QWidget):
             self.selbar.raise_()
         else:
             self.selbar.hide()
+
+    def _toggle_burst(self, row):
+        """Open a collapsed run where it stands, keeping your place.
+
+        The model resets to re-lay the rows, and a reset drops the scroll
+        position -- which on a page of photographs means the run you just opened
+        is no longer on screen.
+        """
+        run = self.model.burst_at(row)
+        if run is None:
+            return
+        bar = self.view.verticalScrollBar()
+        where = bar.value()
+        self.model.toggle_burst(run[0].id)
+        self._shown = None              # the rows changed; refresh() must rebuild
+        QTimer.singleShot(0, lambda: bar.setValue(where))
+        QTimer.singleShot(0, self._refresh_rail)
 
     def _open_from_index(self, ix):
         if ix.data(KindRole) == KIND_PERIOD:

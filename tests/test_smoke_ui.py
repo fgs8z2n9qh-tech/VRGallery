@@ -497,6 +497,12 @@ def test_scrolling_does_not_redo_work_it_can_keep(window, app):
     # antialiased clip path per tile is what made scrolling expensive.
     import time as _time
     from PySide6.QtGui import QPixmap as _QPix
+    # One tile per photograph for this one: what is being counted is the cost of
+    # painting a tile, and the fixture's photos are all a second apart, so left
+    # collapsed they fold into a handful of stacks and there is nothing to count.
+    page.model.set_collapse_bursts(False)
+    for _ in range(4):
+        app.processEvents()
     d = page.delegate
     thumb = _QPix(400, 225)
     thumb.fill()
