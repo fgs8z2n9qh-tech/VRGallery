@@ -234,3 +234,54 @@ def test_the_photo_itself_is_still_smoothed(app):
     assert len(greys) > 4, (
         f"the photo scaled up into {len(greys)} distinct levels: it is not "
         f"being smoothed")
+
+
+# ------------------------------------------------------------ the day header
+
+def _header(day="2026-02-14", count=23, w=1200, h=38):
+    view = _View()
+    view.resize(1400, 400)
+    d = gridmodel.PhotoDelegate(view, _Cache(None, 9999.0))
+    _KEEP.append((view, d))
+    return d._header_pixmap(day, count, w, h).toImage(), d
+
+
+def test_the_day_header_carries_a_rule_across_the_row():
+    """On a wall of photographs a date in the same weight as everything else is
+    simply lost. The rule is what gives a day a top edge."""
+    img, _d = _header()
+    rule = QColor(style.PAL["border"]).rgb() & 0xFFFFFF
+    hits = [x for x in range(300, 1000)
+            if any((img.pixel(x, y) & 0xFFFFFF) == rule for y in range(img.height()))]
+    assert len(hits) > 400, (
+        f"only {len(hits)} columns of rule between the date and the count")
+
+
+def test_the_count_is_a_chip_on_the_right():
+    img, _d = _header()
+    plate = QColor(style.PAL["surface2"]).rgb() & 0xFFFFFF
+    hits = sum(1 for x in range(img.width() - 60, img.width())
+               for y in range(img.height())
+               if (img.pixel(x, y) & 0xFFFFFF) == plate)
+    assert hits > 60, f"only {hits} pixels of chip at the right-hand end"
+
+
+def test_a_day_with_no_photos_grows_no_chip():
+    """Nothing to count, nothing to draw -- and the rule must still not run off
+    the end of the row."""
+    img, _d = _header(count=0)
+    plate = QColor(style.PAL["surface2"]).rgb() & 0xFFFFFF
+    hits = sum(1 for x in range(img.width() - 60, img.width())
+               for y in range(img.height())
+               if (img.pixel(x, y) & 0xFFFFFF) == plate)
+    assert hits == 0, f"{hits} pixels of chip for a day with no photos"
+
+
+def test_a_narrow_row_drops_the_rule_rather_than_drawing_it_backwards():
+    """In a half-screen window the date and the chip can meet. A line drawn from
+    x0 to an x1 behind it is a line drawn the wrong way."""
+    img, _d = _header(day="2026-02-14", count=1234, w=200)
+    rule = QColor(style.PAL["border"]).rgb() & 0xFFFFFF
+    hits = sum(1 for x in range(img.width()) for y in range(img.height())
+               if (img.pixel(x, y) & 0xFFFFFF) == rule)
+    assert hits < 40, f"{hits} pixels of rule in a row with no room for one"

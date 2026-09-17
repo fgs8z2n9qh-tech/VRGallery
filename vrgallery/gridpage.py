@@ -285,8 +285,15 @@ class StickyDay(QWidget):
     further right, and the text jumped sideways the moment a day pinned.
     """
 
-    HEIGHT = 40
-    PAD = 11          # where the grid draws its day headers, measured
+    HEIGHT = 38
+    # Where the grid draws its day headers: the view's spacing, plus the 4 px
+    # the header pixmap insets its own text by. Derived rather than written
+    # down, because it WAS written down -- as 11, for a 7 px spacing -- and the
+    # moment the sheet was tightened the pinned copy's text no longer lined up
+    # with the real header underneath it. Which is the one thing this widget
+    # exists to avoid.
+    TEXT_INSET = 4
+    PAD = 11
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -353,6 +360,13 @@ def _rows_stamp(rows):
 
 
 class GridPage(QWidget):
+    # How much air there is between photographs. Named, because the pinned day
+    # header's inset is derived from it and a test asserts the two agree: when
+    # this was a bare 7 in one place and an 11 in another, tightening the sheet
+    # silently moved the pinned header's text away from the real one.
+    GAP_DAY = 3
+    GAP_DENSE = 2
+
     back_requested = Signal()
 
     def __init__(self, main, cache, parent=None):
@@ -490,6 +504,7 @@ class GridPage(QWidget):
         self._rail_due.setSingleShot(True)
         self._rail_due.timeout.connect(self._refresh_rail)
         self.sticky = StickyDay(self)
+        self.sticky.PAD = self.view.spacing() + StickyDay.TEXT_INSET
         self.sticky.set_glass_source(self.view.viewport())
         self.selbar = widgets.SelectionBar(self)
         self.selbar.set_glass_source(self.view.viewport())
@@ -679,7 +694,8 @@ class GridPage(QWidget):
         if stamp[2] is None or stamp != self._shown:
             self._shown = stamp
             self.delegate.set_dense(dense)
-            self.view.setSpacing(2 if dense else 7)
+            self.view.setSpacing(self.GAP_DENSE if dense else self.GAP_DAY)
+            self.sticky.PAD = self.view.spacing() + StickyDay.TEXT_INSET
             # beginResetModel drops the scroll position and the selection, so
             # this is not merely 32 ms of work: an index pass that lands while
             # you are scrolling throws you back to the top of the library.

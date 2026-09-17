@@ -2,7 +2,7 @@
 import time
 from collections import OrderedDict
 
-from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QObject, QPoint,
+from PySide6.QtCore import (QAbstractListModel, QMimeData, QModelIndex, QObject, QPoint, QPointF,
                             QRect, QRectF, QSize, Qt, QTimer, QUrl, Signal)
 from PySide6.QtGui import (QColor, QDrag, QFont, QFontMetrics, QLinearGradient, QPainter,
                            QPainterPath, QPen, QPixmap)
@@ -355,7 +355,7 @@ class PhotoDelegate(QStyledItemDelegate):
     def set_dense(self, on):
         """Continuous mode: square tiles that divide the row exactly."""
         self.dense = bool(on)
-        self.radius = 3 if self.dense else 12
+        self.radius = 3 if self.dense else 6
         self._tiles.clear()
 
     def drop_tile(self, pid):
@@ -432,7 +432,7 @@ class PhotoDelegate(QStyledItemDelegate):
             vw = key[0]
             self._size_key = key
             self._sizes_now = (self.cell_size(), self.period_size(),
-                               QSize(max(80, vw - 24), 46), max(80, vw - 24))
+                               QSize(max(80, vw - 24), 38), max(80, vw - 24))
         return self._sizes_now
 
     def sizeHint(self, option, index):
@@ -487,14 +487,38 @@ class PhotoDelegate(QStyledItemDelegate):
         out.setDevicePixelRatio(dpr)
         out.fill(QColor(0, 0, 0, 0))
         q = QPainter(out)
-        text_r = QRectF(4, 0, max(1, w - 8), max(1, h - 6))
+        q.setRenderHint(QPainter.Antialiasing, True)
+        base = max(1, h - 6)
         q.setFont(self._f_head)
+        fm = q.fontMetrics()
+        label = fmt.day_label(day)
         q.setPen(QColor(style.PAL["text"]))
-        q.drawText(text_r, AL_LEFT_BOTTOM, fmt.day_label(day))
-        q.setFont(self._f_count)
-        q.setPen(QColor(style.PAL["faint"]))
-        q.drawText(text_r, AL_RIGHT_BOTTOM,
-                   f"{count} {fmt.plural(count, 'photo')}")
+        q.drawText(QRectF(4, 0, max(1, w - 8), base), AL_LEFT_BOTTOM, label)
+
+        # A hairline across the rest of the row. Without it the dates carry the
+        # same weight as everything else on a wall of photographs and simply get
+        # lost in it; this is what gives a day a top edge.
+        chip_w = 0
+        if count:
+            q.setFont(self._f_count)
+            chip_w = max(24, q.fontMetrics().horizontalAdvance(str(count)) + 16)
+        x0 = 4 + fm.horizontalAdvance(label) + 14
+        x1 = w - 8 - (chip_w + 12 if chip_w else 0)
+        if x1 > x0 + 8:
+            y = base - fm.height() / 2 + 1.5
+            q.setPen(QColor(style.PAL["border"]))
+            q.drawLine(QPointF(x0, y), QPointF(x1, y))
+
+        # The count as a chip rather than "23 photos": the word is the same on
+        # every row and the number is the only part that differs.
+        if chip_w:
+            chip = QRectF(w - 8 - chip_w, base - 19, chip_w, 19)
+            q.setPen(Qt.NoPen)
+            q.setBrush(QColor(style.PAL["surface2"]))
+            q.drawRoundedRect(chip, 9.5, 9.5)
+            q.setPen(QColor(style.PAL["dim"]))
+            q.setFont(self._f_count)
+            q.drawText(chip, Qt.AlignCenter, str(count))
         q.end()
         self._heads[key] = out
         while len(self._heads) > 96:

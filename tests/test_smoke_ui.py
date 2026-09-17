@@ -13,7 +13,7 @@ from PySide6.QtWidgets import QApplication
 
 from PySide6.QtCore import QPoint
 
-from vrgallery import paths
+from vrgallery import gridpage, paths
 from vrgallery.gridmodel import KIND_PHOTO as KIND_PHOTO_KIND
 
 
@@ -272,8 +272,11 @@ def test_ctrl_wheel_resizes_the_thumbnails_and_keeps_your_place(window, app):
     app.processEvents()
     assert page.slider.value() > before_px, "ctrl+wheel up did not zoom in"
     app.processEvents()
-    # the row you were looking at is still the row at the top
-    assert page._top_index().row() == before_row
+    # The row you were looking at is still the row at the top. Within one:
+    # _top_index reads whatever row covers a probe line a little under the
+    # floating header, not the row scrollTo pinned, so two adjacent rows can
+    # swap there when the spacing between tiles changes.
+    assert abs(page._top_index().row() - before_row) <= 1
 
     page.view.wheelEvent(wheel(-120, Qt.ControlModifier))
     app.processEvents()
@@ -462,7 +465,9 @@ def test_all_shows_one_continuous_sheet_of_photos(window, app):
 
     page.set_level("day")                    # and back, without leftovers
     app.processEvents()
-    assert not page.delegate.dense and page.view.spacing() == 7
+    assert not page.delegate.dense
+    assert page.view.spacing() == gridpage.GridPage.GAP_DAY, (
+        "coming back from All left the dense spacing behind")
     assert page.delegate.cell_size().width() != page.delegate.cell_size().height()
     window.hide()
 
